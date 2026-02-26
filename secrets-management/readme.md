@@ -1,6 +1,8 @@
 # Datadog Secrets Management Strategy for Multi-Cloud Environments
 
-## Why
+## Problem Statement
+
+Infrastructure spans AWS, Azure, GCP, VMware, and on-premises environments. Currently, Datadog API keys and integration credentials such as MySQL passwords are hardcoded in configuration files, scripts, and deployments across platforms. This introduces credential exposure risk, lacks centralized secret management, has no structured key rotation process, and creates potential compliance gaps.
 
 The goal is to move to a secure model where secrets are centrally managed, encrypted, and injected at runtime using identity-based access with no hardcoded credentials.
 
@@ -8,12 +10,53 @@ The goal is to move to a secure model where secrets are centrally managed, encry
 
 This document outlines three approaches to secrets management, each with different trade-offs in terms of complexity, tooling requirements, and operational overhead.
 
+## How Datadog Secrets Management Works
+
+All three approaches use the same Datadog Agent mechanism. The Agent calls a backend executable at startup, passing secret handles via stdin and receiving plaintext values via stdout. Secrets are loaded in memory only and never written to disk.
+
+### Protocol
+
+The Datadog Agent communicates with the backend executable using a JSON protocol:
+
+**Agent sends to executable via stdin:**
+```json
+{
+  "version": "1.0",
+  "secrets": ["db.password", "dd.api_key"]
+}
+```
+
+**Executable must return via stdout:**
+```json
+{
+  "db.password": { "value": "mysecretpassword" },
+  "dd.api_key": { "value": "abc123def456" }
+}
+```
+
+### Integration Configuration
+
+Integration configs reference secrets using ENC[] placeholders:
+
+```yaml
+# /etc/datadog-agent/conf.d/mysql.d/conf.yaml
+instances:
+  - host: localhost
+    username: datadog
+    password: ENC[db.password]
+```
+
+The Agent resolves `ENC[db.password]` at startup by calling the configured backend. Secrets are never written to disk or exposed in logs.
+
+### Prerequisites
+
+- Datadog Agent 6.12+ for custom executable backends
+- Datadog Agent 7.70+ for native backend support (AWS Secrets Manager, Azure Key Vault, GCP Secret Manager)
+- For the native `datadog-secret-backend` binary (used in Approach 2), refer to [datadog-secret-backend releases](https://github.com/DataDog/datadog-secret-backend/releases) for version compatibility
+
 ---
 
 ## 1) Platform-Native Secret Management (No External Tools)
-
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/cd7537cc-2907-4114-a11d-dfa58d8b7fed" />
-
 
 This approach uses no external secrets management tools. It relies on native operating system capabilities, Kubernetes features, and your existing deployment pipeline.
 
@@ -113,11 +156,13 @@ While not fully automated like a dedicated secrets platform, implement a structu
 - Access to Datadog Agent configuration files
 
 **Network Connectivity:**
-- All Datadog Agent hosts must have outbound connectivity to Datadog endpoints:
-  - `*.datadoghq.com` - Agent metrics and logs submission (HTTPS/443)
-  - `intake.logs.datadoghq.com` - Log collection (HTTPS/443)
-  - `api.datadoghq.com` - API calls (HTTPS/443)
-  - `trace.agent.datadoghq.com` - APM traces (HTTPS/443)
+
+| Endpoint | Purpose | Port/Protocol |
+|----------|---------|---------------|
+| `*.datadoghq.com` | Agent metrics, APM, logs | HTTPS (443) |
+| `intake.logs.datadoghq.com` | Log collection | HTTPS (443) |
+
+Additional considerations:
 - For Kubernetes environments: Internal cluster networking for Secret access (no external connectivity required for Secrets)
 - For VMs: Local filesystem access only (no external network requirements for secret storage)
 - If using custom secret backend command that calls external APIs, ensure connectivity to those endpoints
@@ -135,7 +180,107 @@ While not fully automated like a dedicated secrets platform, implement a structu
 - Ensure encryption at rest is enabled
 
 **Step 3: Configure Datadog Agent Secrets Management**
-- Create a simple script that reads secrets from the storage location
+
+**For Kubernetes - Store and Mount the Secret:**
+
+```yaml
+# k8s-datadog-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: datadog-secrets
+  namespace: datadog
+type: Opaque
+stringData:
+  DD_API_KEY: "your-datadog-api-key"
+  mysql_password: "your-mysql-password"
+```
+
+```bash
+kubectl apply -f k8s-datadog-secret.yaml
+```
+
+**Helm chart - reference existing secret instead of hardcoding:**
+
+```yaml
+# values.yaml
+datadog:
+  apiKeyExistingSecret: datadog-secrets
+  apiKeyExistingSecretKey: DD_API_KEY
+
+  # Mount additional secrets for integration credentials
+  volumes:
+    - name: integration-secrets
+      secret:
+        secretName: datadog-secrets
+  volumeMounts:
+    - name: integration-secrets
+      mountPath: /etc/datadog-agent/secrets
+      readOnly: true
+```
+
+**For VMs / On-Premises - Store Secrets in a Protected File:**
+
+```bash
+# Create secrets directory and file
+sudo mkdir -p /etc/datadog-agent/secrets
+sudo touch /etc/datadog-agent/secrets/secrets.json
+sudo chmod 700 /etc/datadog-agent/secrets
+sudo chmod 600 /etc/datadog-agent/secrets/secrets.json
+sudo chown dd-agent:dd-agent /etc/datadog-agent/secrets/secrets.json
+```
+
+```json
+// /etc/datadog-agent/secrets/secrets.json
+{
+  "dd.api_key": "your-datadog-api-key",
+  "db.password": "your-mysql-password"
+}
+```
+
+**Backend Script - Read from Local File:**
+
+```python
+#!/usr/bin/env python3
+# /etc/datadog-agent/secrets/fetch_secrets.py
+import json, sys
+
+SECRETS_FILE = "/etc/datadog-agent/secrets/secrets.json"
+
+def main():
+    payload = json.load(sys.stdin)
+    with open(SECRETS_FILE) as f:
+        store = json.load(f)
+    result = {}
+    for handle in payload.get("secrets", []):
+        if handle in store:
+            result[handle] = {"value": store[handle]}
+        else:
+            result[handle] = {"error": f"handle '{handle}' not found"}
+            print(f"Error: secret '{handle}' not found", file=sys.stderr)
+    print(json.dumps(result))
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+# Set permissions - Agent will refuse to run world-readable executables
+sudo chmod 700 /etc/datadog-agent/secrets/fetch_secrets.py
+sudo chown dd-agent:dd-agent /etc/datadog-agent/secrets/fetch_secrets.py
+```
+
+**Datadog Agent Configuration:**
+
+```yaml
+# /etc/datadog-agent/datadog.yaml
+api_key: ENC[dd.api_key]
+
+secret_backend_command: /etc/datadog-agent/secrets/fetch_secrets.py
+secret_backend_timeout: 30
+secret_backend_output_max_size: 1048576
+```
+
 - Configure the script path in datadog.yaml as secret_backend_command
 - Update integration configurations to use ENC[secret_handle] syntax
 
@@ -145,6 +290,30 @@ While not fully automated like a dedicated secrets platform, implement a structu
 - Test the deployment process in a non-production environment
 
 **Step 5: Implement Rotation Process**
+
+**For VMs:**
+```bash
+# 1. Update the secrets file
+sudo vi /etc/datadog-agent/secrets/secrets.json
+
+# 2. Restart the Agent to pick up new values
+sudo systemctl restart datadog-agent
+
+# 3. Verify resolution
+sudo datadog-agent secret
+```
+
+**For Kubernetes:**
+```bash
+# Update the Secret object and trigger a rolling restart
+kubectl create secret generic datadog-secrets \
+  --from-literal=DD_API_KEY=new-api-key \
+  --from-literal=mysql_password=new-password \
+  -n datadog --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl rollout restart deployment/datadog-agent -n datadog
+```
+
 - Document the rotation schedule for each secret type
 - Create automation scripts or playbooks for rotation
 - Set up monitoring to alert on secrets approaching expiration
@@ -154,12 +323,27 @@ While not fully automated like a dedicated secrets platform, implement a structu
 - Test that secrets are properly injected at runtime
 - Review access logs to ensure only authorized processes access secrets
 
+### Pros
+
+- No additional vendor tools or licensing costs
+- Uses native platform capabilities you already have
+- No external dependencies or network calls for secret retrieval
+- Simple to understand and maintain
+- Works consistently across all platforms using native features
+- Low operational overhead once established
+
+### Cons
+
+- Rotation and governance require manual processes and discipline
+- Multi-cloud consistency depends on operational discipline across teams
+- No centralized audit trail across platforms
+- Limited secret versioning and rollback capabilities
+- Manual coordination required for secret updates across environments
+- Compliance reporting requires aggregating logs from multiple systems
 
 ---
 
 ## 2) AWS-Native Approach (AWS Secrets Manager + KMS)
-
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/5f6776f5-c214-4c25-8da5-7cdafd94c209" />
 
 This approach uses AWS managed services for secret storage and encryption. AWS Secrets Manager is the secrets management service that stores and manages secrets, while AWS KMS (Key Management Service) provides the encryption layer. This approach is ideal when AWS is the primary or central cloud platform, though it can be extended to other clouds with additional configuration.
 
@@ -311,7 +495,27 @@ Reference: https://github.com/DataDog/datadog-secret-backend/blob/main/docs/aws/
 
 ### High-Level Setup Guidance
 
-**Step 1: Create KMS Key**
+**Step 1: Create KMS Key and Store Secrets**
+
+```bash
+# Create a customer-managed KMS key
+aws kms create-key \
+  --description "Datadog secrets encryption key" \
+  --key-usage ENCRYPT_DECRYPT
+
+# Store Datadog API key in Secrets Manager (encrypted with KMS)
+aws secretsmanager create-secret \
+  --name "datadog/api_key" \
+  --secret-string "your-datadog-api-key" \
+  --kms-key-id "arn:aws:kms:us-east-1:123456789012:key/your-key-id"
+
+# Store MySQL password as a JSON secret (multiple values in one secret)
+aws secretsmanager create-secret \
+  --name "datadog/mysql" \
+  --secret-string '{"password":"your-mysql-password","username":"datadog"}' \
+  --kms-key-id "arn:aws:kms:us-east-1:123456789012:key/your-key-id"
+```
+
 - Create a KMS customer master key for encrypting secrets
 - Configure key policy to allow Secrets Manager service to use the key
 - Configure key policy to allow IAM roles to decrypt using the key
@@ -324,6 +528,32 @@ Reference: https://github.com/DataDog/datadog-secret-backend/blob/main/docs/aws/
 - Configure automatic rotation if the source system supports it
 
 **Step 3: Create IAM Roles and Policies**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowSecretsRetrieval",
+      "Effect": "Allow",
+      "Action": ["secretsmanager:GetSecretValue"],
+      "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:datadog/*"
+    },
+    {
+      "Sid": "AllowKMSDecrypt",
+      "Effect": "Allow",
+      "Action": ["kms:Decrypt"],
+      "Resource": "arn:aws:kms:us-east-1:123456789012:key/your-kms-key-id"
+    }
+  ]
+}
+```
+
+Attach this policy to:
+- **EC2:** IAM role → instance profile → attached to EC2 instances
+- **EKS:** IAM role → annotated on Kubernetes service account (IRSA)
+- **On-prem:** IAM user (static credentials)
+
 - For AWS workloads: Create IAM role for Datadog Agent on EC2 instances and attach instance profile
 - For EKS: Create IAM role and configure IRSA
 - Create IAM user for on-premises hosts (if using static credentials)
@@ -331,35 +561,142 @@ Reference: https://github.com/DataDog/datadog-secret-backend/blob/main/docs/aws/
 - Attach policy allowing kms:Decrypt for the KMS key
 - For on-premises: Ensure IAM user has same permissions as IAM role (Secrets Manager read, KMS decrypt)
 
-**Step 4: Create Secret Retrieval Script (if using custom executable)**
-- If using Datadog Agent native support: Configure secret_backend_type in datadog.yaml
-- If using custom executable: Write script that uses AWS SDK to call Secrets Manager GetSecretValue API
-- Script should authenticate using instance metadata or IRSA credentials
-- Script should parse Datadog Agent JSON input and return formatted JSON output
-- Handle errors appropriately and log to stderr
-- Note: Datadog Agent 7.70+ supports AWS Secrets Manager natively, eliminating need for custom script
+**Step 4: Install datadog-secret-backend (Recommended)**
+
+Download the binary from the official release page and install it on the Agent host:
+
+```bash
+# Example for Linux amd64
+curl -L -o /usr/local/bin/datadog-secret-backend \
+  https://github.com/DataDog/datadog-secret-backend/releases/latest/download/datadog-secret-backend_linux_amd64
+
+chmod 700 /usr/local/bin/datadog-secret-backend
+chown dd-agent:dd-agent /usr/local/bin/datadog-secret-backend
+```
+
+**Alternative: Custom Python Script**
+
+If you prefer a custom script instead of the binary:
+
+```python
+#!/usr/bin/env python3
+# /etc/datadog-agent/secrets/fetch_secrets.py
+import json, sys, boto3
+
+REGION = "us-east-1"
+
+def main():
+    payload = json.load(sys.stdin)
+    client = boto3.client("secretsmanager", region_name=REGION)
+    result = {}
+    for handle in payload.get("secrets", []):
+        try:
+            resp = client.get_secret_value(SecretId=handle)
+            result[handle] = {"value": resp["SecretString"]}
+        except Exception as e:
+            result[handle] = {"error": str(e)}
+            print(f"Error retrieving {handle}: {e}", file=sys.stderr)
+    print(json.dumps(result))
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+sudo chmod 700 /etc/datadog-agent/secrets/fetch_secrets.py
+sudo chown dd-agent:dd-agent /etc/datadog-agent/secrets/fetch_secrets.py
+```
 
 **Step 5: Configure Datadog Agent**
-- **For AWS workloads (EC2/EKS):**
-  - Option A (Native Support): Configure datadog.yaml with secret_backend_type set to aws.secrets
-  - The Agent will automatically use instance profile (EC2) or IRSA (EKS) credentials
-  - No need to specify credentials in configuration
-- **For on-premises hosts:**
-  - Option A (Native Support with Static Credentials): Configure datadog.yaml with:
-    ```yaml
-    secret_backend_type: aws.secrets
-    secret_backend_config:
-      aws_session:
-        aws_region: <your-region>
-        aws_access_key_id: "<access-key-id>"
-        aws_secret_access_key: "<secret-access-key>"
-    ```
-  - Option B (Environment Variables): Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY as environment variables on the Agent service
-  - Option C (Custom Executable): Install secret retrieval script with appropriate permissions and configure secret_backend_command
+
+**EC2 with Instance Profile (no credentials needed in config):**
+
+```yaml
+# /etc/datadog-agent/datadog.yaml
+api_key: ENC[datadog/api_key]
+
+secret_backend_command: /usr/local/bin/datadog-secret-backend
+secret_backend_type: aws.secrets
+secret_backend_config:
+  aws_session:
+    aws_region: us-east-1
+```
+
+**EKS with IRSA - annotate the service account:**
+
+```yaml
+# serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: datadog-agent
+  namespace: datadog
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/datadog-agent-role
+```
+
+```yaml
+# datadog.yaml (no credentials - IRSA handles auth automatically)
+secret_backend_command: /usr/local/bin/datadog-secret-backend
+secret_backend_type: aws.secrets
+secret_backend_config:
+  aws_session:
+    aws_region: us-east-1
+```
+
+**On-Premises / Non-AWS Hosts (static IAM credentials required):**
+
+```yaml
+# /etc/datadog-agent/datadog.yaml
+secret_backend_command: /usr/local/bin/datadog-secret-backend
+secret_backend_type: aws.secrets
+secret_backend_config:
+  aws_session:
+    aws_region: us-east-1
+    aws_access_key_id: "AKIAIOSFODNN7EXAMPLE"
+    aws_secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```
+
+**Alternatively, inject via systemd to avoid credentials in the YAML file:**
+
+```ini
+# /etc/systemd/system/datadog-agent.service.d/aws-credentials.conf
+[Service]
+Environment="AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
+Environment="AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+Environment="AWS_DEFAULT_REGION=us-east-1"
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart datadog-agent
+```
+
+**Reference Secrets in Integration Configs:**
+
+```yaml
+# /etc/datadog-agent/conf.d/mysql.d/conf.yaml
+instances:
+  - host: localhost
+    username: datadog
+    password: ENC[datadog/mysql]   # Secret name in Secrets Manager
+```
+
+Note: If the secret is a JSON object with multiple keys, the datadog-secret-backend returns the full JSON string as the value. Parse accordingly, or store individual secrets for each credential.
+
 - Update integration configurations to use ENC[secretId;secretKey] syntax for AWS Secrets Manager
 - Test secret retrieval and Agent startup
 
-**Step 6: Deploy and Verify**
+**Step 6: Verify and Test**
+
+```bash
+# Check that secrets are being resolved correctly
+sudo datadog-agent secret
+
+# Check Agent status
+sudo datadog-agent status
+```
+
 - **For AWS workloads:**
   - Attach IAM instance profile to EC2 instances running Datadog Agent
   - For EKS, annotate service account with IAM role ARN
@@ -381,9 +718,6 @@ Reference: https://github.com/DataDog/datadog-secret-backend/blob/main/docs/aws/
 ---
 
 ## 3) CyberArk Approach (Centralized Hybrid Secrets Management)
-
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/1f338b4c-83e6-4452-89a7-c48566adb655" />
-
 
 This approach uses CyberArk as a centralized secrets management platform across all cloud providers and on-premises environments. It provides a single control plane for secret governance, rotation, and audit across the entire hybrid infrastructure.
 
@@ -519,7 +853,23 @@ Additional network considerations:
 - Add platform identities (IAM roles, Managed Identities, Service Accounts) to safes
 - Configure rotation policies for secrets that support rotation
 
-**Step 4: Store Secrets in CyberArk**
+**Step 4: Store Secrets in CyberArk Vault**
+
+Organize secrets using a Safe-per-environment convention:
+
+```
+Safe: DatadogProd
+  └── datadog-api-key
+  └── mysql-password
+  └── snmp-community-string
+
+Safe: DatadogDev
+  └── datadog-api-key
+  └── mysql-password
+```
+
+Grant your platform identities (IAM role ARN, Managed Identity, AD account) access to the appropriate Safe via CyberArk Access Control policies.
+
 - Store Datadog API key and App key in CyberArk
 - Store integration credentials (MySQL, PostgreSQL, etc.) in CyberArk
 - Organize secrets using folders or naming conventions
@@ -532,6 +882,59 @@ Additional network considerations:
 - Test connectivity and authentication
 
 **Step 6: Create Secret Retrieval Script**
+
+**Backend Script Using CyberArk AIM (Application Identity Manager):**
+
+For VM and on-premises hosts using CyberArk's Central Credential Provider (CCP):
+
+```python
+#!/usr/bin/env python3
+# /etc/datadog-agent/secrets/fetch_secrets.py
+import json, sys, requests
+
+# CyberArk Central Credential Provider endpoint
+CYBERARK_URL = "https://cyberark.internal.example.com"
+APP_ID = "DatadogAgent"
+# Certificate-based auth (recommended) - adjust path as needed
+CERT = ("/etc/datadog-agent/secrets/client.crt", "/etc/datadog-agent/secrets/client.key")
+CA_BUNDLE = "/etc/ssl/certs/ca-bundle.crt"
+
+def get_secret(handle):
+    # Handle format: "SafeName/ObjectName"
+    parts = handle.split("/", 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid handle format '{handle}'. Expected 'SafeName/ObjectName'")
+    safe, obj = parts
+    resp = requests.get(
+        f"{CYBERARK_URL}/AIMWebService/api/Accounts",
+        params={"AppID": APP_ID, "Safe": safe, "Object": obj},
+        cert=CERT,
+        verify=CA_BUNDLE,
+        timeout=10
+    )
+    resp.raise_for_status()
+    return resp.json()["Content"]
+
+def main():
+    payload = json.load(sys.stdin)
+    result = {}
+    for handle in payload.get("secrets", []):
+        try:
+            result[handle] = {"value": get_secret(handle)}
+        except Exception as e:
+            result[handle] = {"error": str(e)}
+            print(f"Error retrieving '{handle}': {e}", file=sys.stderr)
+    print(json.dumps(result))
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+sudo chmod 700 /etc/datadog-agent/secrets/fetch_secrets.py
+sudo chown dd-agent:dd-agent /etc/datadog-agent/secrets/fetch_secrets.py
+```
+
 - Write custom executable script that implements Datadog Agent secret backend command protocol
 - Script should authenticate to CyberArk using platform identity (IAM role, Managed Identity, Service Account, or certificates)
 - Script should call CyberArk API to retrieve secrets based on secret handles from Datadog Agent
@@ -539,6 +942,73 @@ Additional network considerations:
 - Handle authentication, errors, and logging appropriately (errors to stderr, output to stdout)
 
 **Step 7: Configure Datadog Agent**
+
+```yaml
+# /etc/datadog-agent/datadog.yaml
+api_key: ENC[DatadogProd/datadog-api-key]
+
+secret_backend_command: /etc/datadog-agent/secrets/fetch_secrets.py
+secret_backend_timeout: 30
+secret_backend_output_max_size: 1048576
+```
+
+```yaml
+# /etc/datadog-agent/conf.d/mysql.d/conf.yaml
+instances:
+  - host: localhost
+    username: datadog
+    password: ENC[DatadogProd/mysql-password]
+```
+
+**Kubernetes with Conjur (CyberArk's K8s Integration):**
+
+For Kubernetes workloads, use the CyberArk Secrets Provider for Kubernetes to sync Conjur secrets into Kubernetes Secrets at pod startup:
+
+```yaml
+# conjur-secrets-provider.yaml - init container approach
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datadog-agent
+  namespace: datadog
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: cyberark-secrets-provider
+          image: cyberark/secrets-provider-for-k8s:latest
+          env:
+            - name: CONJUR_AUTHN_LOGIN
+              value: "host/datadog/datadog-agent"
+            - name: CONJUR_APPLIANCE_URL
+              value: "https://conjur.internal.example.com"
+            - name: K8S_SECRETS
+              value: "datadog-secrets"
+          volumeMounts:
+            - name: podinfo
+              mountPath: /etc/conjur/podinfo
+      containers:
+        - name: datadog-agent
+          image: gcr.io/datadoghq/agent:latest
+          envFrom:
+            - secretRef:
+                name: datadog-secrets   # Populated by the init container
+```
+
+```yaml
+# conjur-policy.yaml - grant EKS service account access to Conjur secrets
+- !policy
+  id: datadog
+  body:
+    - !host datadog-agent
+    - !permit
+      role: !host datadog-agent
+      privileges: [read, execute]
+      resources:
+        - !variable datadog/api_key
+        - !variable datadog/mysql_password
+```
+
 - Install secret retrieval script with appropriate permissions (700 on Linux, restricted on Windows)
 - Configure datadog.yaml with secret_backend_command pointing to script
 - Set secret_backend_timeout and secret_backend_output_max_size as needed
@@ -558,7 +1028,18 @@ Additional network considerations:
 - Deploy Datadog Agent with CyberArk integration on on-premises
 - Verify secrets are retrieved correctly on all platforms
 
-**Step 10: Monitor and Audit**
+**Step 10: Verify and Monitor**
+
+```bash
+# Test the backend script directly before configuring the Agent
+echo '{"version": "1.0", "secrets": ["DatadogProd/datadog-api-key"]}' \
+  | sudo -u dd-agent /etc/datadog-agent/secrets/fetch_secrets.py
+
+# After Agent configuration
+sudo datadog-agent secret
+sudo datadog-agent status
+```
+
 - Review CyberArk audit logs for secret access
 - Monitor for failed authentication attempts
 - Set up alerts for rotation failures
@@ -567,43 +1048,62 @@ Additional network considerations:
 
 ---
 
-## Comparison and Selection Guide
+## Comparison & Decision Guide
 
-### When to Choose Platform-Native (Option 1)
+| Feature | Approach 1: Platform-Native | Approach 2: AWS Secrets Manager | Approach 3: CyberArk |
+|---------|----------------------------|-------------------------------|---------------------|
+| **External tooling** | None | AWS account | CyberArk license + deployment |
+| **Multi-cloud support** | Yes (per-platform storage) | Limited (on-prem needs static creds) | Yes (native) |
+| **Automatic rotation** | Manual / CI-CD | Yes (via Lambda) | Yes (centralized) |
+| **Audit trail** | Deployment logs | CloudTrail | CyberArk audit logs |
+| **On-prem support** | Yes | Yes (with static IAM creds) | Yes |
+| **K8s integration** | K8s Secrets + RBAC | IRSA + native backend | Conjur / CSI driver |
+| **Setup complexity** | Low | Medium | High |
+| **Best for** | Getting started quickly, cost-sensitive | AWS-primary environments | Existing CyberArk users, strict compliance |
 
-Choose this approach if:
-- You want to minimize tooling and vendor dependencies
+### Decision Guidelines
+
+**Choose Approach 1 (Platform-Native) if:**
+- You want to eliminate hardcoded credentials immediately with no new vendor tooling
+- You can enforce rotation via process/CI-CD
+- Cost is a primary concern
 - Your team has strong operational discipline for secret management
 - You have existing CI/CD and configuration management processes
-- Cost is a primary concern
-- You can maintain consistency across platforms through process
 
-### When to Choose AWS Secrets Manager (Option 2)
-
-Choose this approach if:
-- AWS is your primary or central cloud platform
-- You want managed rotation and versioning
+**Choose Approach 2 (AWS Secrets Manager) if:**
+- AWS is your primary platform
+- You want managed rotation, versioning, and CloudTrail audit out of the box
 - You prefer AWS-native services and integrations
 - You have AWS expertise in your team
-- Other clouds can access AWS Secrets Manager via cross-cloud patterns
+- Note that non-AWS hosts require static IAM credentials
 
-### When to Choose CyberArk (Option 3)
-
-Choose this approach if:
-- You already have CyberArk in your environment
+**Choose Approach 3 (CyberArk) if:**
+- CyberArk is already deployed in your environment
+- Compliance requires a single unified secrets governance plane across all cloud and on-premises environments
 - You need centralized governance across multiple clouds
-- Compliance and audit requirements are strict
 - You have dedicated security and platform teams
 - You need enterprise-grade secret rotation and management
 
-## Migration Considerations
+## Migration Checklist
 
-1. **Audit Current State**: Identify all hardcoded secrets across platforms
-2. **Choose Approach**: Select the option that best fits your organization
-3. **Pilot Implementation**: Start with one platform or environment
-4. **Test Thoroughly**: Verify secrets are retrieved and injected correctly
-5. **Update Documentation**: Document the new secret management process
-6. **Train Teams**: Ensure teams understand the new process
-7. **Roll Out Gradually**: Migrate platforms one at a time
-8. **Remove Hardcoded Secrets**: Clean up all hardcoded credentials
-9. **Monitor and Audit**: Continuously monito
+Use this checklist to guide your migration regardless of which approach you choose:
+
+- [ ] Audit all config files, scripts, and Helm values for hardcoded credentials
+- [ ] Inventory every secret by type, platform, and rotation frequency
+- [ ] Select and deploy chosen secrets management approach (pilot on one platform first)
+- [ ] Install and permission the backend script or datadog-secret-backend binary
+- [ ] Configure datadog.yaml with secret_backend_command
+- [ ] Update integration YAML files to use ENC[handle] syntax
+- [ ] Verify secret resolution: `sudo datadog-agent secret`
+- [ ] Open required firewall/security group rules (see Network Requirements sections above)
+- [ ] Remove all hardcoded credentials from config files and repositories
+- [ ] Implement and test rotation procedure
+- [ ] Enable audit logging (CloudTrail / CyberArk audit / K8s audit log)
+- [ ] Document rotation runbook and schedule for each secret type
+
+## References
+
+- [Datadog Secrets Management Documentation](https://docs.datadoghq.com/agent/configuration/secrets-management/)
+- [datadog-secret-backend (AWS Secrets Manager / SSM native backend)](https://github.com/DataDog/datadog-secret-backend)
+- [CyberArk Secrets Provider for Kubernetes](https://github.com/cyberark/secrets-provider-for-k8s)
+- [AWS Secrets Manager VPC Endpoints](https://docs.aws.amazon.com/secretsmanager/latest/userguide/vpc-endpoints-overview.html)
