@@ -1,8 +1,6 @@
 # Datadog Secrets Management Strategy for Multi-Cloud Environments
 
-## Problem Statement
-
-Infrastructure spans AWS, Azure, GCP, VMware, and on-premises environments. Currently, Datadog API keys and integration credentials such as MySQL passwords are hardcoded in configuration files, scripts, and deployments across platforms. This introduces credential exposure risk, lacks centralized secret management, has no structured key rotation process, and creates potential compliance gaps.
+## Why
 
 The goal is to move to a secure model where secrets are centrally managed, encrypted, and injected at runtime using identity-based access with no hardcoded credentials.
 
