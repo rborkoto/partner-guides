@@ -1,14 +1,12 @@
-# Datadog Secrets Management Strategy for Multi-Cloud Environments
+# Datadog Secrets Management Strategy for Multi-Cloud Environments (v 0.8)
 
-## Problem Statement
+## What is covered
 
-Infrastructure spans AWS, Azure, GCP, VMware, and on-premises environments. Currently, Datadog API keys and integration credentials such as MySQL passwords are hardcoded in configuration files, scripts, and deployments across platforms. This introduces credential exposure risk, lacks centralized secret management, has no structured key rotation process, and creates potential compliance gaps.
-
-The goal is to move to a secure model where secrets are centrally managed, encrypted, and injected at runtime using identity-based access with no hardcoded credentials.
+Ways to manage Datadog secrets , options will be continously updated , Hashicorp vault to be added in next revision.
 
 ## Solution Options
 
-This document outlines three approaches to secrets management, each with different trade-offs in terms of complexity, tooling requirements, and operational overhead.
+This document currently outlines three approaches to secrets management, each with different trade-offs in terms of complexity, tooling requirements, and operational overhead.
 
 ## How Datadog Secrets Management Works
 
@@ -57,6 +55,9 @@ The Agent resolves `ENC[db.password]` at startup by calling the configured backe
 ---
 
 ## 1) Platform-Native Secret Management (No External Tools)
+
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/a37acde0-3697-4b8a-8685-d8cd4cfe53d7" />
+
 
 This approach uses no external secrets management tools. It relies on native operating system capabilities, Kubernetes features, and your existing deployment pipeline.
 
@@ -346,6 +347,9 @@ kubectl rollout restart deployment/datadog-agent -n datadog
 ## 2) AWS-Native Approach (AWS Secrets Manager + KMS)
 
 This approach uses AWS managed services for secret storage and encryption. AWS Secrets Manager is the secrets management service that stores and manages secrets, while AWS KMS (Key Management Service) provides the encryption layer. This approach is ideal when AWS is the primary or central cloud platform, though it can be extended to other clouds with additional configuration.
+
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/1eccb3e9-1bd7-407a-afaa-886079674db6" />
+
 
 ### Goal
 
@@ -720,6 +724,9 @@ sudo datadog-agent status
 ## 3) CyberArk Approach (Centralized Hybrid Secrets Management)
 
 This approach uses CyberArk as a centralized secrets management platform across all cloud providers and on-premises environments. It provides a single control plane for secret governance, rotation, and audit across the entire hybrid infrastructure.
+
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/124c265c-8265-4543-bc29-b6fd3ee6ba5c" />
+
 
 ### Goal
 
