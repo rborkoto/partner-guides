@@ -1,5 +1,7 @@
 # Datadog Secrets Management Strategy for Multi-Cloud Environments (v 0.8)
 
+Note : This is not meant to replace any official Datadog documentation , please refer to docs.datadoghq.com for latest updates and changes
+
 ## What is covered
 
 Ways to manage Datadog secrets , options will be continously updated , Hashicorp vault to be added in next revision.
