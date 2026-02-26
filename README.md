@@ -1,4 +1,4 @@
-# hitachi-guides
+# partner-guides
 
 ---
 
