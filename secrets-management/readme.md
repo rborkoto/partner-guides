@@ -154,23 +154,6 @@ While not fully automated like a dedicated secrets platform, implement a structu
 - Test that secrets are properly injected at runtime
 - Review access logs to ensure only authorized processes access secrets
 
-### Pros
-
-- No additional vendor tools or licensing costs
-- Uses native platform capabilities you already have
-- No external dependencies or network calls for secret retrieval
-- Simple to understand and maintain
-- Works consistently across all platforms using native features
-- Low operational overhead once established
-
-### Cons
-
-- Rotation and governance require manual processes and discipline
-- Multi-cloud consistency depends on operational discipline across teams
-- No centralized audit trail across platforms
-- Limited secret versioning and rollback capabilities
-- Manual coordination required for secret updates across environments
-- Compliance reporting requires aggregating logs from multiple systems
 
 ---
 
@@ -394,24 +377,6 @@ Reference: https://github.com/DataDog/datadog-secret-backend/blob/main/docs/aws/
 - Test rotation process in non-production environment
 - Monitor rotation success and failures
 
-### Pros
-
-- Fully managed service with automatic rotation capabilities
-- Integrated with AWS IAM for access control
-- Versioning and audit trails via CloudTrail
-- No infrastructure to manage
-- Pay-per-secret pricing model
-- Automatic backup and recovery
-- Integration with other AWS services
-
-### Cons
-
-- Best suited when AWS is the primary cloud platform
-- Azure, GCP, and on-premises environments need cross-cloud access patterns
-- Additional network configuration may be required for private endpoints
-- Costs scale with number of secrets and API calls
-- Limited to AWS ecosystem for native integration
-- Requires AWS expertise and IAM policy management
 
 ---
 
@@ -599,25 +564,6 @@ Additional network considerations:
 - Set up alerts for rotation failures
 - Generate compliance reports from CyberArk
 
-### Pros
-
-- Centralized governance and audit across all platforms
-- Single control plane for secret management
-- Automated rotation with centralized policies
-- Comprehensive compliance reporting and audit trails
-- Works consistently across hybrid and multi-cloud environments
-- Enterprise-grade security and access controls
-- Integration with existing identity providers
-
-### Cons
-
-- Requires CyberArk license and infrastructure investment
-- Integration and operational overhead for setup and maintenance
-- Requires CyberArk expertise and training
-- Network connectivity requirements from all platforms to CyberArk
-- Potential performance considerations for high-frequency secret access
-- Vendor lock-in to CyberArk platform
-- Initial setup complexity across multiple platforms
 
 ---
 
@@ -652,8 +598,6 @@ Choose this approach if:
 
 ## Migration Considerations
 
-Regardless of which approach you choose, follow these migration steps:
-
 1. **Audit Current State**: Identify all hardcoded secrets across platforms
 2. **Choose Approach**: Select the option that best fits your organization
 3. **Pilot Implementation**: Start with one platform or environment
@@ -662,17 +606,4 @@ Regardless of which approach you choose, follow these migration steps:
 6. **Train Teams**: Ensure teams understand the new process
 7. **Roll Out Gradually**: Migrate platforms one at a time
 8. **Remove Hardcoded Secrets**: Clean up all hardcoded credentials
-9. **Monitor and Audit**: Continuously monitor secret access and rotation
-
-## Security Best Practices (All Approaches)
-
-- Implement least privilege access controls
-- Enable encryption at rest and in transit
-- Rotate secrets regularly according to policy
-- Monitor and audit all secret access
-- Never log or expose secrets in plaintext
-- Use separate secrets for different environments
-- Maintain an inventory of all secrets
-- Document secret ownership and rotation schedules
-- Test disaster recovery and secret restoration procedures
-- Review and update access policies regularly
+9. **Monitor and Audit**: Continuously monito
