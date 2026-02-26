@@ -67,7 +67,6 @@ This approach uses no external secrets management tools. It relies on native ope
 - Runtime injection of secrets
 - Least privilege access controls
 - Repeatable rotation process, even if not fully automated
-- No additional vendor tools or licensing costs
 
 ### How It Works
 
@@ -323,24 +322,6 @@ kubectl rollout restart deployment/datadog-agent -n datadog
 - Verify secrets are not present in logs or configuration dumps
 - Test that secrets are properly injected at runtime
 - Review access logs to ensure only authorized processes access secrets
-
-### Pros
-
-- No additional vendor tools or licensing costs
-- Uses native platform capabilities you already have
-- No external dependencies or network calls for secret retrieval
-- Simple to understand and maintain
-- Works consistently across all platforms using native features
-- Low operational overhead once established
-
-### Cons
-
-- Rotation and governance require manual processes and discipline
-- Multi-cloud consistency depends on operational discipline across teams
-- No centralized audit trail across platforms
-- Limited secret versioning and rollback capabilities
-- Manual coordination required for secret updates across environments
-- Compliance reporting requires aggregating logs from multiple systems
 
 ---
 
