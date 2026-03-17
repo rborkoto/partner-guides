@@ -14,7 +14,7 @@ the lowest-effort option. Custom Lambda code is only introduced where no
 simpler path exists.
 
 > **Prerequisites:** Before following this guide, complete all steps in the
-> [Prerequisites README](./PREREQUISITES.md).
+> [Prerequisites README](https://github.com/rborkoto/partner-guides/blob/main/AWS%20Non%20Standard%20Metrics/Pre-requsities.md).
 
 ---
 
