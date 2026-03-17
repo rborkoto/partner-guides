@@ -223,6 +223,51 @@ The IAM principal (user or role) running the deployment steps in this guide requ
         "secretsmanager:DescribeSecret"
       ],
       "Resource": "arn:aws:secretsmanager:*:*:secret:datadog/*"
+    },
+    {
+      "Sid": "CloudFormationManagement",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:WaitStackCreateComplete",
+        "cloudformation:DescribeStackEvents"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "KinesisFirehoseManagement",
+      "Effect": "Allow",
+      "Action": [
+        "firehose:CreateDeliveryStream",
+        "firehose:DescribeDeliveryStream",
+        "firehose:ListDeliveryStreams",
+        "firehose:TagDeliveryStream"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchMetricStreams",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricStream",
+        "cloudwatch:GetMetricStream",
+        "cloudwatch:ListMetricStreams",
+        "cloudwatch:DeleteMetricStream"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3Management",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:GetBucketLocation",
+        "s3:PutBucketPolicy",
+        "s3:GetBucketPolicy",
+        "s3:PutBucketVersioning"
+      ],
+      "Resource": "arn:aws:s3:::YOUR_BACKUP_BUCKET"
     }
   ]
 }
@@ -233,9 +278,11 @@ The IAM principal (user or role) running the deployment steps in this guide requ
 ```bash
 aws iam simulate-principal-policy \
   --policy-source-arn arn:aws:iam::ACCOUNT_ID:user/YOUR_USER \
-  --action-names lambda:CreateFunction events:PutRule logs:PutMetricFilter \
+  --action-names lambda:CreateFunction events:PutRule logs:PutMetricFilter cloudformation:CreateStack firehose:CreateDeliveryStream cloudwatch:PutMetricStream \
   --resource-arns "*"
 ```
+
+> **Note:** Replace `YOUR_BACKUP_BUCKET` in the S3 permissions with your actual S3 bucket name. If you plan to use CloudWatch Metric Streams (Part 1, Option A), you'll need an S3 bucket for Firehose backup. See section 7 for S3 bucket setup.
 
 ---
 
@@ -337,13 +384,69 @@ Pass `--profile PROFILE_NAME` to each CLI command where the target account diffe
 
 ---
 
+## 7. S3 Bucket for CloudWatch Metric Streams (Optional)
+
+If you plan to use CloudWatch Metric Streams (Part 1, Option A) for DRS metrics, you need an S3 bucket for Firehose backup. This bucket stores failed delivery attempts.
+
+### 7.1 Create S3 Bucket
+
+```bash
+aws s3 mb s3://YOUR_BACKUP_BUCKET --region YOUR_REGION
+```
+
+### 7.2 Enable Versioning (Recommended)
+
+```bash
+aws s3api put-bucket-versioning \
+  --bucket YOUR_BACKUP_BUCKET \
+  --versioning-configuration Status=Enabled
+```
+
+### 7.3 Apply Lifecycle Policy (Optional)
+
+To manage costs, add a lifecycle policy to delete old backup files:
+
+```bash
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket YOUR_BACKUP_BUCKET \
+  --lifecycle-configuration '{
+    "Rules": [{
+      "Id": "DeleteOldBackups",
+      "Status": "Enabled",
+      "Expiration": {"Days": 30}
+    }]
+  }'
+```
+
+> **Note:** Replace `YOUR_BACKUP_BUCKET` with your chosen bucket name. The bucket name must be globally unique across all AWS accounts.
+
+---
+
+## 8. AWS Security Hub (Optional)
+
+If you plan to use the Security Hub integration (Part 3) for Config and Control Tower compliance metrics, Security Hub must be enabled. However, note that Security Hub provides findings (logs), not direct metrics. For metric-based alerting, the Lambda approach in Part 4 is recommended.
+
+### 8.1 Enable Security Hub (If Using Part 3)
+
+```bash
+aws securityhub enable-security-hub \
+  --enable-default-standards \
+  --region YOUR_REGION
+```
+
+> **Note:** Security Hub is only required if you choose to use Part 3 (Security Hub integration). If you use Part 4 (Lambda approach) for compliance metrics, Security Hub is not required.
+
+---
+
 ## Prerequisites Checklist
 
 Before moving to the main guide, confirm each item below is complete.
 
 - [ ] Datadog AWS integration is active and showing green in the integration tile
 - [ ] CloudTrail trail is enabled, logging, and delivering to a CloudWatch Logs log group
-- [ ] Your deployment principal has the IAM permissions listed in Section 3
+- [ ] Your deployment principal has the IAM permissions listed in Section 3 (including CloudFormation, Firehose, and Metric Streams permissions if using those features)
 - [ ] Datadog API key is stored as a plaintext secret in Secrets Manager and the ARN is noted
 - [ ] Python 3.12 runtime is available and approved in your environment
 - [ ] AWS CLI is installed, configured, and `get-caller-identity` returns the expected account
+- [ ] (Optional) S3 bucket created for CloudWatch Metric Streams backup if using Part 1, Option A
+- [ ] (Optional) Security Hub enabled if using Part 3 (Security Hub integration approach)
