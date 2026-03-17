@@ -1,139 +1,143 @@
 # Importing Non-Standard AWS Metrics into Datadog
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Important Notes](#important-notes)
-- [Prerequisites](#prerequisites)
-- [Quick Reference Table](#quick-reference-table)
-- [Method 1: Custom CloudWatch Namespaces](#method-1-custom-cloudwatch-namespaces)
-- [Method 2: CloudWatch Logs Metric Filters](#method-2-cloudwatch-logs-metric-filters)
-- [Method 3: EventBridge, Lambda, and Datadog API](#method-3-eventbridge-lambda-and-datadog-api)
-- [Method 4: Scheduled Lambda Polling](#method-4-scheduled-lambda-polling)
-- [Lambda Deployment](#lambda-deployment)
-- [GPU Metrics](#gpu-metrics)
-- [Verification](#verification)
-- [Recommended Monitors](#recommended-monitors)
-- [References](#references)
-
----
-
 ## Overview
 
-The Datadog AWS integration polls a predefined set of CloudWatch namespaces and collects metrics automatically. A number of AWS services publish their operational data in ways the standard integration does not cover:
+The Datadog AWS integration automatically polls a defined set of CloudWatch
+namespaces. Several AWS services, however, publish operational data in ways the
+standard integration does not cover: some use CloudWatch namespaces not included
+by default, others emit events through EventBridge without creating CloudWatch
+metrics, and some require direct API polling to retrieve current state.
 
-- Some services publish to CloudWatch namespaces not included in Datadog's default polling list
-- Some services emit data as EventBridge events and never create CloudWatch metrics
-- Some services require direct API polling to retrieve current state
+This guide covers all configuration steps and code required to bring the
+following metrics into Datadog.
 
-This guide covers four collection patterns to bring all metrics in the reference table below into Datadog. Each section includes configuration steps, AWS CLI commands, and Python Lambda code where applicable.
-
----
-
-## Important Notes
-
-**Custom metric quota.** All metrics collected using the methods in this guide count as custom metrics in Datadog, including those collected from custom CloudWatch namespaces. Custom metrics are billable. Review the [Datadog custom metrics documentation](https://docs.datadoghq.com/metrics/custom_metrics/) before implementing at scale.
-
-**Metric naming via API.** Metrics submitted directly through the Datadog metrics API use the exact name specified in your code. Metrics collected through CloudWatch custom namespace polling follow Datadog's CloudWatch naming normalisation and the resulting name in Datadog may not match the target name exactly. Use the metric renaming feature in the Datadog AWS integration, or use the Lambda and API approach, if exact naming is required.
-
-**Event schema verification.** EventBridge event schemas for services such as AWS Control Tower can vary between service versions. Before deploying Lambda handlers to production, confirm the actual event structure emitted in your environment using EventBridge Schema Discovery or by reviewing events in the AWS console. Field names in handler code should be treated as a starting point, not a guarantee.
+> **Prerequisites:** Before following this guide, complete all steps in the
+> [Prerequisites README](./PREREQUISITES.md).
 
 ---
 
-## Prerequisites
+## Metric Source Reference
 
-- Datadog AWS integration configured with a valid IAM cross-account role. See [AWS Integration Setup](https://docs.datadoghq.com/integrations/amazon_web_services/).
-- AWS CloudTrail enabled with a trail delivering logs to a CloudWatch Logs log group.
-- IAM permissions to create CloudWatch metric filters, EventBridge rules, Lambda functions, and IAM roles.
-- A Datadog API key stored as a plaintext secret string in AWS Secrets Manager.
-- Python 3.12 for Lambda functions in this guide.
-- AWS CLI configured with appropriate credentials.
-
-Full guide just for prerequsistes [here](https://github.com/rborkoto/partner-guides/blob/main/AWS%20Non%20Standard%20Metrics/Pre-requsities.md) 
----
-
-## Quick Reference Table
-
-| Metric | AWS Data Source | Collection Method | Section |
-|---|---|---|---|
-| `aws.drs.replication_lag` | CloudWatch `AWS/DRS` namespace | Custom CloudWatch namespace | [Method 1](#method-1-custom-cloudwatch-namespaces) |
-| `aws.drs.recovery_point_age` | CloudWatch `AWS/DRS` namespace | Custom CloudWatch namespace | [Method 1](#method-1-custom-cloudwatch-namespaces) |
-| `aws.drs.recovery_instance_ready` | DRS EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.backup.backupjobfailed` | AWS Backup EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `custom.drs.test.failures` | DRS `DescribeJobs` API | Scheduled Lambda + Datadog API | [Method 4](#method-4-scheduled-lambda-polling) |
-| `aws.config.rule.non_compliant` | AWS Config EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.config.public_resource_detected` | AWS Config EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.cloudtrail.unauthorized_api_calls` | CloudTrail logs via CloudWatch Logs | CloudWatch Logs metric filter | [Method 2](#method-2-cloudwatch-logs-metric-filters) |
-| `aws.cloudtrail.root_activity` | CloudTrail logs via CloudWatch Logs | CloudWatch Logs metric filter | [Method 2](#method-2-cloudwatch-logs-metric-filters) |
-| `aws.organizations.scp.denied_requests` | CloudTrail logs (management account) | CloudWatch Logs metric filter | [Method 2](#method-2-cloudwatch-logs-metric-filters) |
-| `aws.controltower.landingzone.health` | Control Tower EventBridge (management account) | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.controltower.account.drift` | Control Tower EventBridge (management account) | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.controltower.guardrail.failed` | Control Tower EventBridge (management account) | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.controltower.account.provisioning_failed` | Service Catalog EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.controltower.logging.disabled` | AWS Config EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.ssm.managed_instance.online` | SSM `DescribeInstanceInformation` API | Scheduled Lambda + Datadog API | [Method 4](#method-4-scheduled-lambda-polling) |
-| `aws.ssm.patch.compliance` | SSM `ListComplianceItems` API | Scheduled Lambda + Datadog API | [Method 4](#method-4-scheduled-lambda-polling) |
-| `aws.ssm.command.failed` | SSM EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.ssm.automation.failed` | SSM EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| `aws.ssm.session.failed` | CloudTrail events via EventBridge | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
+| Metric | AWS Source | Collection Method |
+|---|---|---|
+| `aws.drs.replication_lag` | CloudWatch `AWS/DRS` | Custom namespace |
+| `aws.drs.recovery_point_age` | CloudWatch `AWS/DRS` | Custom namespace |
+| `aws.drs.recovery_instance_ready` | DRS EventBridge events | Lambda and API |
+| `aws.backup.backupjobfailed` | Backup EventBridge events | Lambda and API |
+| `custom.drs.test.failures` | DRS API | Scheduled Lambda |
+| `aws.config.rule.non_compliant` | Config EventBridge events | Lambda and API |
+| `aws.config.public_resource_detected` | Config EventBridge events | Lambda and API |
+| `aws.cloudtrail.unauthorized_api_calls` | CloudTrail Logs | Metric filter or Forwarder |
+| `aws.cloudtrail.root_activity` | CloudTrail Logs | Metric filter or Forwarder |
+| `aws.organizations.scp.denied_requests` | CloudTrail Logs (management account) | Metric filter or Forwarder |
+| `aws.controltower.landingzone.health` | Control Tower EventBridge | Lambda and API |
+| `aws.controltower.account.drift` | Control Tower EventBridge | Lambda and API |
+| `aws.controltower.guardrail.failed` | Control Tower EventBridge or Security Hub | Lambda and API or Security Hub |
+| `aws.controltower.account.provisioning_failed` | Service Catalog EventBridge | Lambda and API |
+| `aws.controltower.logging.disabled` | Config EventBridge events | Lambda and API or Security Hub |
+| `aws.ssm.managed_instance.online` | SSM API | Scheduled Lambda |
+| `aws.ssm.patch.compliance` | SSM API | Scheduled Lambda |
+| `aws.ssm.command.failed` | SSM EventBridge events | Lambda and API |
+| `aws.ssm.automation.failed` | SSM EventBridge events | Lambda and API |
+| `aws.ssm.session.failed` | CloudTrail EventBridge events | Lambda and API |
 
 ---
 
-## Method 1: Custom CloudWatch Namespaces
+## Choosing Your Approach
 
-AWS Elastic Disaster Recovery publishes replication and recovery metrics to the CloudWatch namespace `AWS/DRS`. This namespace is not included in Datadog's default integration polling list and must be added manually.
+Not all metrics require the same implementation path. Use the table below to
+decide which sections of this guide apply to your setup before proceeding.
 
-For the full list of available metrics and dimensions published by DRS, see the [AWS DRS monitoring with CloudWatch documentation](https://docs.aws.amazon.com/drs/latest/userguide/monitoring-cloudwatch.html).
+| Scenario | Recommended Path |
+|---|---|
+| Minimal setup, already forwarding logs to Datadog | Parts 1, 3, 4, and Alternative Option A |
+| Security and compliance focus, using Security Hub | Parts 1, 3, 4, and Alternative Option B |
+| Full metric control, no existing log forwarding | Parts 1, 2, 3, and 4 |
+| Mixed environment | Combine namespace addition for DRS, Forwarder for log-derived metrics, Lambda only for polling and event-driven metrics |
+
+The table below maps each metric to which part of this guide covers it.
+
+| Metric | Covered In |
+|---|---|
+| `aws.drs.replication_lag` | Part 1 |
+| `aws.drs.recovery_point_age` | Part 1 |
+| `aws.cloudtrail.unauthorized_api_calls` | Part 2 or Alternative Option A |
+| `aws.cloudtrail.root_activity` | Part 2 or Alternative Option A |
+| `aws.organizations.scp.denied_requests` | Part 2 or Alternative Option A |
+| `aws.backup.backupjobfailed` | Part 3 |
+| `aws.config.rule.non_compliant` | Part 3 or Alternative Option B |
+| `aws.config.public_resource_detected` | Part 3 or Alternative Option B |
+| `aws.drs.recovery_instance_ready` | Part 3 |
+| `aws.controltower.landingzone.health` | Part 3 |
+| `aws.controltower.account.drift` | Part 3 |
+| `aws.controltower.guardrail.failed` | Part 3 or Alternative Option B |
+| `aws.controltower.account.provisioning_failed` | Part 3 |
+| `aws.controltower.logging.disabled` | Part 3 or Alternative Option B |
+| `aws.ssm.command.failed` | Part 3 |
+| `aws.ssm.automation.failed` | Part 3 |
+| `aws.ssm.session.failed` | Part 3 |
+| `aws.ssm.managed_instance.online` | Part 4 |
+| `aws.ssm.patch.compliance` | Part 4 |
+| `custom.drs.test.failures` | Part 4 |
+
+---
+
+## Part 1: Custom CloudWatch Namespaces
+
+AWS Elastic Disaster Recovery publishes replication and recovery metrics to the
+`AWS/DRS` CloudWatch namespace. This namespace is not polled by the Datadog
+integration by default and must be added manually.
 
 **Metrics covered:**
 - `aws.drs.replication_lag`
 - `aws.drs.recovery_point_age`
 
-### Configuration Steps
+**Steps:**
 
-1. In Datadog, go to **Integrations > Amazon Web Services**.
-2. Select the AWS account to configure.
-3. Open the **Metric Collection** tab.
-4. Scroll to the custom namespaces section and add `AWS/DRS`.
-5. Save the configuration.
+1. In Datadog go to **Integrations > Amazon Web Services**
+2. Select the AWS account you are configuring
+3. Open the **Metric Collection** tab
+4. Scroll to the custom namespace section and add `AWS/DRS`
+5. Save the configuration
 
-Datadog will poll the following metrics from the `AWS/DRS` namespace:
-
-| CloudWatch Metric Name | Datadog Metric Name | Primary Dimension |
+| CloudWatch Metric | Datadog Metric | Dimension Tag |
 |---|---|---|
-| `ReplicationLag` | `aws.drs.replication_lag` | `SourceServerID` |
-| `RecoveryPointAge` | `aws.drs.recovery_point_age` | `SourceServerID` |
+| `ReplicationLag` | `aws.drs.replication_lag` | `sourceserverid` |
+| `RecoveryPointAge` | `aws.drs.recovery_point_age` | `sourceserverid` |
 
-CloudWatch dimensions are converted to Datadog tags automatically. The `SourceServerID` dimension becomes the tag `sourceserverid` on each data point, which lets you scope monitors and dashboards to individual source servers.
-
-Allow up to 15 minutes after saving before data appears in Datadog. DRS publishes these metrics at one-minute resolution when replication is active. If no data appears, confirm that at least one DRS source server has an active replication session.
+DRS publishes metrics at one-minute resolution when replication is active.
+Allow up to 15 minutes after saving before data appears in Datadog.
 
 ---
 
-## Method 2: CloudWatch Logs Metric Filters
+## Part 2: CloudWatch Logs Metric Filters
 
-CloudTrail records every API call made in your AWS account. When CloudTrail is configured to deliver logs to a CloudWatch Logs log group, metric filters extract numeric counts from matching log events and publish them as CloudWatch custom metrics. Datadog can then collect those metrics by polling the custom namespace.
-
-See the [CloudWatch Logs metric filter documentation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/MonitoringLogData.html) and the [filter pattern syntax reference](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/FilterAndPatternSyntax.html) for background on how filters work.
+CloudTrail logs can be filtered to create CloudWatch custom metrics. Datadog
+then polls those metrics by adding the custom namespace to the integration.
 
 **Metrics covered:**
 - `aws.cloudtrail.unauthorized_api_calls`
 - `aws.cloudtrail.root_activity`
 - `aws.organizations.scp.denied_requests`
 
-### Step 1: Confirm CloudTrail Log Delivery
+> **Alternative:** If you are already forwarding logs to Datadog, skip this
+> part and use **Alternative Option A** instead. It achieves the same result
+> without CloudWatch metric filter configuration.
 
-In the AWS console, go to **CloudTrail > Trails** and confirm that your trail has a CloudWatch Logs log group associated with it.
+### 2.1 Confirm CloudTrail Log Delivery
 
-For SCP-related events (`aws.organizations.scp.denied_requests`), the trail must be on the **management account**. SCP deny actions originate at the management account before affecting member accounts. See the [AWS Organizations SCP documentation](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html) for details.
+Confirm your trail is delivering logs to a CloudWatch Logs log group. For SCP
+events, use the trail on the management account.
 
-Note the log group name before running the commands below.
+```bash
+aws cloudtrail describe-trails --include-shadow-trails false
+```
 
-### Step 2: Create Metric Filters
+### 2.2 Create the Metric Filters
 
-Replace `YOUR_LOG_GROUP` with your CloudTrail log group name in each command.
+Replace `YOUR_LOG_GROUP` with your CloudTrail log group name.
 
-**Unauthorized API calls** counts events where the error code indicates an authorisation failure:
+**Unauthorized API calls:**
 
 ```bash
 aws logs put-metric-filter \
@@ -144,7 +148,7 @@ aws logs put-metric-filter \
     metricName="UnauthorizedAPICalls",metricNamespace="CloudTrailMetrics",metricValue=1,defaultValue=0
 ```
 
-**Root account activity** counts events where the calling identity is the root user:
+**Root account activity:**
 
 ```bash
 aws logs put-metric-filter \
@@ -155,7 +159,7 @@ aws logs put-metric-filter \
     metricName="RootAccountActivity",metricNamespace="CloudTrailMetrics",metricValue=1,defaultValue=0
 ```
 
-**SCP denied requests** counts access denied errors that reference a service control policy in the error message. SCP denials appear in CloudTrail logs as `AccessDenied` errors. See the [CloudTrail log event reference](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference.html) for the log structure:
+**SCP denied requests:**
 
 ```bash
 aws logs put-metric-filter \
@@ -166,73 +170,37 @@ aws logs put-metric-filter \
     metricName="SCPDeniedRequests",metricNamespace="CloudTrailMetrics",metricValue=1,defaultValue=0
 ```
 
-> **Note:** The exact wording in `errorMessage` for SCP denials can vary. Verify the phrase used in your environment by querying recent CloudTrail events in CloudWatch Logs Insights before relying on this filter in production monitors.
+### 2.3 Add the Namespace to Datadog
 
-### Step 3: Add CloudTrailMetrics Namespace to Datadog
-
-Follow the same process as Method 1 and add `CloudTrailMetrics` as a custom namespace in the Datadog AWS integration. Datadog will normalise the CloudWatch metric names when ingesting them. Confirm the resulting names in **Metrics > Explorer** after the namespace is added. Use metric renaming in the integration configuration if the names need to match the target names exactly.
+Follow the same process as Part 1 and add `CloudTrailMetrics` as a custom
+namespace in the Datadog AWS integration. Use the **Metric Renaming** feature
+to map the CloudWatch-generated names to your target metric names.
 
 ---
 
-## Method 3: EventBridge, Lambda, and Datadog API
+## Part 3: EventBridge Lambda Integration
 
-For services that publish events through EventBridge rather than writing CloudWatch metrics, the collection pattern is:
+For services that emit events through EventBridge rather than CloudWatch, the
+pattern is: EventBridge rule matches the event, triggers a Lambda function, and
+the Lambda submits a metric to Datadog via the metrics API.
 
-1. An EventBridge rule matches events from the target service.
-2. The rule invokes a Lambda function.
-3. The Lambda parses the event and calls the [Datadog metrics submission API](https://docs.datadoghq.com/api/latest/metrics/).
+### 3.1 Lambda Function
 
-See the [Amazon EventBridge rules documentation](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules.html) for background on how EventBridge rules and targets work.
-
-### IAM Role for Lambda
-
-Create an IAM execution role for the Lambda function with the following inline policy. For the polling-based handlers in Method 4, add the relevant read permissions for the SSM and DRS APIs to this same role.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "CloudWatchLogs",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "arn:aws:logs:*:*:*"
-    },
-    {
-      "Sid": "SecretsManagerReadAPIKey",
-      "Effect": "Allow",
-      "Action": "secretsmanager:GetSecretValue",
-      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:datadog/api-key*"
-    }
-  ]
-}
-```
-
-### Base Lambda Function
-
-The function below is the shared foundation for all event-based metric handlers. Individual service handlers are added in each section below and registered in `route_event`. The function uses only `boto3` and the Python standard library, both of which are available in the Lambda Python 3.12 runtime. No additional packages need to be installed or packaged.
-
-**Environment variables required:**
-
-| Variable | Value |
-|---|---|
-| `DD_API_KEY_SECRET_ARN` | ARN of the Secrets Manager secret containing the Datadog API key |
-| `DD_SITE` | Your Datadog site, e.g. `datadoghq.com` or `datadoghq.eu` |
+All event-driven metrics share a single Lambda function. Create a file named
+`lambda_function.py` with the following code.
 
 ```python
 import json
 import os
 import time
-import urllib.request
 import boto3
+import urllib.request
+from datetime import datetime, timedelta, timezone
 
+
+# ── Metric Submission ──────────────────────────────────────────────────────────
 
 def get_api_key():
-    """Retrieve the Datadog API key from Secrets Manager."""
     secret_arn = os.environ["DD_API_KEY_SECRET_ARN"]
     client = boto3.client("secretsmanager")
     response = client.get_secret_value(SecretId=secret_arn)
@@ -240,12 +208,6 @@ def get_api_key():
 
 
 def submit_metric(metric_name, value, tags, metric_type="count"):
-    """
-    Submit a single metric to Datadog via the v1 series API.
-
-    metric_type accepts: "count", "gauge", or "rate"
-    Reference: https://docs.datadoghq.com/api/latest/metrics/#submit-metrics
-    """
     api_key = get_api_key()
     site = os.environ.get("DD_SITE", "datadoghq.com")
     url = f"https://api.{site}/api/v1/series"
@@ -268,11 +230,12 @@ def submit_metric(metric_name, value, tags, metric_type="count"):
         },
         method="POST"
     )
-
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req) as resp:
         if resp.status not in (200, 202):
-            raise RuntimeError(f"Datadog API returned HTTP {resp.status}")
+            raise RuntimeError(f"Datadog API returned {resp.status}")
 
+
+# ── Event Router ───────────────────────────────────────────────────────────────
 
 def lambda_handler(event, context):
     source = event.get("source", "")
@@ -286,14 +249,10 @@ def lambda_handler(event, context):
         f"account_id:{account}",
     ]
 
-    route_event(source, detail_type, detail, base_tags)
-
-
-def route_event(source, detail_type, detail, base_tags):
     if source == "aws.backup":
         handle_backup(detail, base_tags)
     elif source == "aws.config":
-        handle_config(detail, base_tags)
+        handle_config(detail_type, detail, base_tags)
     elif source == "aws.drs":
         handle_drs(detail, base_tags)
     elif source == "aws.controltower":
@@ -304,29 +263,12 @@ def route_event(source, detail_type, detail, base_tags):
         handle_ssm(detail_type, detail, base_tags)
     elif source == "aws.cloudtrail":
         handle_cloudtrail(detail, base_tags)
-```
+    elif source == "aws.events":
+        run_pollers()
 
----
 
-### 3.1 AWS Backup
+# ── AWS Backup ─────────────────────────────────────────────────────────────────
 
-AWS Backup publishes a `Backup Job State Change` event to EventBridge whenever a backup job transitions state. See the [AWS Backup EventBridge notifications documentation](https://docs.aws.amazon.com/aws-backup/latest/devguide/eventbridge.html) for the full event schema and available states.
-
-**EventBridge rule pattern:**
-
-```json
-{
-  "source": ["aws.backup"],
-  "detail-type": ["Backup Job State Change"],
-  "detail": {
-    "state": ["FAILED", "ABORTED", "EXPIRED"]
-  }
-}
-```
-
-**Handler:**
-
-```python
 def handle_backup(detail, base_tags):
     state = detail.get("state", "unknown")
     resource_type = detail.get("resourceType", "unknown")
@@ -339,38 +281,10 @@ def handle_backup(detail, base_tags):
             f"state:{state.lower()}",
         ]
         submit_metric("aws.backup.backupjobfailed", 1, tags, "count")
-```
 
----
 
-### 3.2 AWS Config
+# ── AWS Config ─────────────────────────────────────────────────────────────────
 
-AWS Config publishes a `Config Rules Compliance Change` event to EventBridge each time a rule evaluation result changes. See the [AWS Config EventBridge documentation](https://docs.aws.amazon.com/config/latest/developerguide/monitor-config-with-cloudwatchevents.html) for the full event schema.
-
-The same EventBridge rule and handler cover three metrics:
-- `aws.config.rule.non_compliant` fires on every non-compliant evaluation
-- `aws.config.public_resource_detected` fires only when a rule from a configurable list is violated
-- `aws.controltower.logging.disabled` fires when a Control Tower logging-related Config rule is violated
-
-**EventBridge rule pattern:**
-
-```json
-{
-  "source": ["aws.config"],
-  "detail-type": ["Config Rules Compliance Change"],
-  "detail": {
-    "newEvaluationResult": {
-      "complianceType": ["NON_COMPLIANT"]
-    }
-  }
-}
-```
-
-**Handler:**
-
-```python
-# Update this list to match the AWS Config rules in your environment
-# that detect publicly exposed resources.
 PUBLIC_RESOURCE_RULES = [
     "s3-bucket-public-read-prohibited",
     "s3-bucket-public-write-prohibited",
@@ -379,20 +293,22 @@ PUBLIC_RESOURCE_RULES = [
     "vpc-sg-open-only-to-authorized-ports",
 ]
 
-# Control Tower deploys Config rules with names prefixed aws-controltower-.
-# Update these keywords to match the logging-related rules in your landing zone.
-CT_LOGGING_RULE_KEYWORDS = [
+CT_LOGGING_RULES = [
     "aws-controltower-cloudtrail",
     "aws-controltower-log",
 ]
 
-def handle_config(detail, base_tags):
+
+def handle_config(detail_type, detail, base_tags):
+    if detail_type != "Config Rules Compliance Change":
+        return
+
     rule_name = detail.get("configRuleName", "unknown")
     resource_type = detail.get("resourceType", "unknown")
     resource_id = detail.get("resourceId", "unknown")
-    compliance_type = (
-        detail.get("newEvaluationResult", {}).get("complianceType", "unknown")
-    )
+    compliance_type = detail.get(
+        "newEvaluationResult", {}
+    ).get("complianceType", "unknown")
 
     if compliance_type != "NON_COMPLIANT":
         return
@@ -408,65 +324,26 @@ def handle_config(detail, base_tags):
     if any(r in rule_name.lower() for r in PUBLIC_RESOURCE_RULES):
         submit_metric("aws.config.public_resource_detected", 1, tags, "count")
 
-    if any(kw in rule_name.lower() for kw in CT_LOGGING_RULE_KEYWORDS):
+    if any(r in rule_name.lower() for r in CT_LOGGING_RULES):
         submit_metric("aws.controltower.logging.disabled", 1, tags, "count")
-```
 
----
 
-### 3.3 AWS DRS Recovery Instance Readiness
+# ── AWS DRS ────────────────────────────────────────────────────────────────────
 
-AWS DRS emits events to EventBridge when recovery instance state changes occur. See the [AWS DRS monitoring documentation](https://docs.aws.amazon.com/drs/latest/userguide/monitoring-cloudwatch.html) for background on DRS monitoring.
-
-This metric uses a gauge: `1` when the instance is ready for recovery, `0` when it is not.
-
-> **Important:** Verify the exact `detail-type` string and field names emitted by DRS in your environment before deploying to production. Use EventBridge Schema Discovery or inspect live events in the AWS console to confirm the structure.
-
-**EventBridge rule pattern:**
-
-```json
-{
-  "source": ["aws.drs"]
-}
-```
-
-**Handler:**
-
-```python
 def handle_drs(detail, base_tags):
     source_server_id = detail.get("sourceServerID", "unknown")
     readiness_state = detail.get("readinessState", "unknown")
 
     is_ready = 1 if readiness_state == "READY_FOR_RECOVERY" else 0
-
     tags = base_tags + [
         f"source_server_id:{source_server_id}",
         f"readiness_state:{readiness_state.lower()}",
     ]
     submit_metric("aws.drs.recovery_instance_ready", is_ready, tags, "gauge")
-```
 
----
 
-### 3.4 AWS Control Tower
+# ── AWS Control Tower ──────────────────────────────────────────────────────────
 
-Control Tower publishes lifecycle events to EventBridge from the management account. These events cover landing zone health, account drift, guardrail compliance, and account provisioning. See the [Control Tower lifecycle events documentation](https://docs.aws.amazon.com/controltower/latest/userguide/lifecycle-events.html) for the documented event schemas.
-
-> **Important:** Control Tower events originate exclusively in the management account. If this Lambda is deployed in a member account, configure cross-account EventBridge event bus forwarding from the management account, or deploy a separate instance of the Lambda in the management account.
-
-> **Important:** Control Tower's event schema has evolved across service versions. The field names below reflect documented lifecycle event structures, but they must be verified against events in your specific environment before being used in production.
-
-**EventBridge rule pattern:**
-
-```json
-{
-  "source": ["aws.controltower"]
-}
-```
-
-**Handler:**
-
-```python
 def handle_control_tower(detail_type, detail, base_tags):
     if "Drift" in detail_type:
         account_id = detail.get("accountId", "unknown")
@@ -477,7 +354,7 @@ def handle_control_tower(detail_type, detail, base_tags):
         ]
         submit_metric("aws.controltower.account.drift", 1, tags, "count")
 
-    elif "Guardrail" in detail_type:
+    elif "Guardrail" in detail_type or "guardrail" in detail_type.lower():
         guardrail_id = detail.get("guardrailId", "unknown")
         compliance_status = detail.get("complianceStatus", "unknown")
         account_id = detail.get("accountId", "unknown")
@@ -493,25 +370,13 @@ def handle_control_tower(detail_type, detail, base_tags):
         health_status = detail.get("healthStatus", "unknown")
         is_healthy = 1 if health_status == "HEALTHY" else 0
         tags = base_tags + [f"health_status:{health_status.lower()}"]
-        submit_metric("aws.controltower.landingzone.health", is_healthy, tags, "gauge")
-```
+        submit_metric(
+            "aws.controltower.landingzone.health", is_healthy, tags, "gauge"
+        )
 
-**Account provisioning failures** are surfaced through AWS Service Catalog, which Control Tower uses internally to provision accounts. Add a second EventBridge rule targeting Service Catalog events:
 
-```json
-{
-  "source": ["aws.servicecatalog"],
-  "detail-type": ["AWS Service Event via CloudTrail"],
-  "detail": {
-    "eventName": ["ProvisionProduct", "UpdateProvisionedProduct"],
-    "errorCode": [{ "exists": true }]
-  }
-}
-```
+# ── Service Catalog (Control Tower Account Provisioning) ──────────────────────
 
-**Handler:**
-
-```python
 def handle_service_catalog(detail, base_tags):
     event_name = detail.get("eventName", "unknown")
     error_code = detail.get("errorCode", None)
@@ -521,45 +386,24 @@ def handle_service_catalog(detail, base_tags):
             f"event_name:{event_name.lower()}",
             f"error_code:{error_code.lower()}",
         ]
-        submit_metric("aws.controltower.account.provisioning_failed", 1, tags, "count")
-```
+        submit_metric(
+            "aws.controltower.account.provisioning_failed", 1, tags, "count"
+        )
 
----
 
-### 3.5 AWS Systems Manager
+# ── AWS SSM ────────────────────────────────────────────────────────────────────
 
-SSM publishes Run Command and Automation execution state changes to EventBridge. See the [Systems Manager EventBridge events documentation](https://docs.aws.amazon.com/systems-manager/latest/userguide/monitoring-eventbridge-events.html) for the full list of event types and field schemas.
-
-**EventBridge rule pattern for command and automation events:**
-
-```json
-{
-  "source": ["aws.ssm"],
-  "detail-type": [
-    "EC2 Command Status-change Notification",
-    "EC2 Automation Execution Status-change Notification",
-    "EC2 Automation Step Status-change Notification"
-  ]
-}
-```
-
-**Handler:**
-
-```python
 FAILED_STATUSES = {"Failed", "TimedOut", "Cancelling", "Cancelled"}
+
 
 def handle_ssm(detail_type, detail, base_tags):
     if detail_type == "EC2 Command Status-change Notification":
-        command_id = detail.get("command-id", "unknown")
         status = detail.get("status", "unknown")
-        instance_id = detail.get("instance-id", "unknown")
-        document_name = detail.get("document-name", "unknown")
-
         if status in FAILED_STATUSES:
             tags = base_tags + [
-                f"command_id:{command_id}",
-                f"instance_id:{instance_id}",
-                f"document_name:{document_name}",
+                f"command_id:{detail.get('command-id', 'unknown')}",
+                f"instance_id:{detail.get('instance-id', 'unknown')}",
+                f"document_name:{detail.get('document-name', 'unknown')}",
                 f"status:{status.lower()}",
             ]
             submit_metric("aws.ssm.command.failed", 1, tags, "count")
@@ -568,36 +412,18 @@ def handle_ssm(detail_type, detail, base_tags):
         "EC2 Automation Execution Status-change Notification",
         "EC2 Automation Step Status-change Notification",
     ):
-        execution_id = detail.get("ExecutionId", "unknown")
         status = detail.get("Status", "unknown")
-        document_name = detail.get("DocumentName", "unknown")
-
         if status in FAILED_STATUSES:
             tags = base_tags + [
-                f"execution_id:{execution_id}",
-                f"document_name:{document_name}",
+                f"execution_id:{detail.get('ExecutionId', 'unknown')}",
+                f"document_name:{detail.get('DocumentName', 'unknown')}",
                 f"status:{status.lower()}",
             ]
             submit_metric("aws.ssm.automation.failed", 1, tags, "count")
-```
 
-**Session Manager failures** are recorded in CloudTrail when a `StartSession` API call fails with an error. Add a second EventBridge rule targeting CloudTrail events from the SSM service:
 
-```json
-{
-  "source": ["aws.cloudtrail"],
-  "detail-type": ["AWS API Call via CloudTrail"],
-  "detail": {
-    "eventSource": ["ssm.amazonaws.com"],
-    "eventName": ["StartSession"],
-    "errorCode": [{ "exists": true }]
-  }
-}
-```
+# ── CloudTrail (SSM Session Failures) ─────────────────────────────────────────
 
-**Handler:**
-
-```python
 def handle_cloudtrail(detail, base_tags):
     event_source = detail.get("eventSource", "")
     event_name = detail.get("eventName", "")
@@ -608,49 +434,22 @@ def handle_cloudtrail(detail, base_tags):
         and event_name == "StartSession"
         and error_code
     ):
-        user_identity = detail.get("userIdentity", {})
-        user_arn = user_identity.get("arn", "unknown")
+        user_arn = detail.get("userIdentity", {}).get("arn", "unknown")
         tags = base_tags + [
             f"error_code:{error_code.lower()}",
             f"user_arn:{user_arn}",
         ]
         submit_metric("aws.ssm.session.failed", 1, tags, "count")
-```
 
----
 
-## Method 4: Scheduled Lambda Polling
+# ── Pollers ────────────────────────────────────────────────────────────────────
 
-Three metrics represent ongoing state rather than discrete events and require periodic API polling. A separate Lambda function is triggered on a schedule by an EventBridge rule.
+def run_pollers():
+    report_managed_instance_status()
+    report_patch_compliance()
+    report_drs_test_failures()
 
-**Create the scheduled rule:**
 
-```bash
-aws events put-rule \
-  --name "datadog-metrics-poller" \
-  --schedule-expression "rate(5 minutes)" \
-  --state ENABLED
-```
-
-**Add polling permissions to the Lambda IAM role:**
-
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "ssm:DescribeInstanceInformation",
-    "ssm:ListComplianceItems",
-    "drs:DescribeJobs"
-  ],
-  "Resource": "*"
-}
-```
-
-### 4.1 SSM Managed Instance Online Status
-
-Calls `DescribeInstanceInformation` to report the connectivity status of each managed instance. See the [DescribeInstanceInformation API reference](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DescribeInstanceInformation.html).
-
-```python
 def report_managed_instance_status():
     ssm = boto3.client("ssm")
     paginator = ssm.get_paginator("describe_instance_information")
@@ -667,14 +466,11 @@ def report_managed_instance_status():
                 f"platform_type:{platform_type.lower()}",
                 f"ping_status:{ping_status.lower()}",
             ]
-            submit_metric("aws.ssm.managed_instance.online", is_online, tags, "gauge")
-```
+            submit_metric(
+                "aws.ssm.managed_instance.online", is_online, tags, "gauge"
+            )
 
-### 4.2 SSM Patch Compliance
 
-Calls `ListComplianceItems` to retrieve patch compliance data across managed instances. See the [ListComplianceItems API reference](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_ListComplianceItems.html).
-
-```python
 def report_patch_compliance():
     ssm = boto3.client("ssm")
     paginator = ssm.get_paginator("list_compliance_items")
@@ -694,14 +490,7 @@ def report_patch_compliance():
                 f"severity:{severity.lower()}",
             ]
             submit_metric("aws.ssm.patch.compliance", is_compliant, tags, "gauge")
-```
 
-### 4.3 Custom DRS Test Failures
-
-Calls `DescribeJobs` to identify DRS drill jobs that failed or completed with errors in the last 24 hours. See the [DRS DescribeJobs API reference](https://docs.aws.amazon.com/drs/latest/APIReference/API_DescribeJobs.html).
-
-```python
-from datetime import datetime, timedelta, timezone
 
 def report_drs_test_failures():
     drs = boto3.client("drs")
@@ -710,10 +499,7 @@ def report_drs_test_failures():
 
     for page in paginator.paginate():
         for job in page.get("items", []):
-            initiated_by = job.get("initiatedBy", "")
-
-            # Only process jobs initiated as drills
-            if initiated_by not in ("START_DRILL", "DRILL"):
+            if job.get("initiatedBy", "") not in ("START_DRILL", "DRILL"):
                 continue
 
             creation_time = job.get("creationDateTime")
@@ -721,88 +507,29 @@ def report_drs_test_failures():
                 continue
 
             status = job.get("status", "")
-            job_id = job.get("jobID", "unknown")
-
             if status in ("COMPLETED_WITH_ERRORS", "FAILED"):
                 tags = [
-                    f"job_id:{job_id}",
+                    f"job_id:{job.get('jobID', 'unknown')}",
                     f"status:{status.lower()}",
-                    f"initiated_by:{initiated_by.lower()}",
                 ]
                 submit_metric("custom.drs.test.failures", 1, tags, "count")
 ```
 
-**Lambda entry point for the polling function:**
+### 3.2 EventBridge Rules
 
-```python
-def lambda_handler(event, context):
-    report_managed_instance_status()
-    report_patch_compliance()
-    report_drs_test_failures()
-```
-
----
-
-## Lambda Deployment
-
-### Packaging
-
-Both Lambda functions use only `boto3` and the Python standard library, which are available in the Lambda Python 3.12 runtime. No additional packages need to be installed. See the [Lambda deployment package documentation](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-package.html) for background.
+Create one rule per service. The pattern below is repeated for each rule.
+Replace the rule name, event pattern, and statement ID each time.
 
 ```bash
-# Event-driven function
-zip -r event_lambda.zip lambda_function.py
-
-# Polling function
-zip -r polling_lambda.zip polling_function.py
-```
-
-### Deploy the Lambda Functions
-
-Replace `ACCOUNT_ID`, `REGION`, and the role ARN with your values.
-
-```bash
-# Event-driven Lambda
-aws lambda create-function \
-  --function-name datadog-aws-event-metrics \
-  --runtime python3.12 \
-  --handler lambda_function.lambda_handler \
-  --role arn:aws:iam::ACCOUNT_ID:role/datadog-metrics-lambda-role \
-  --zip-file fileb://event_lambda.zip \
-  --timeout 60 \
-  --memory-size 256 \
-  --environment Variables="{DD_API_KEY_SECRET_ARN=arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:datadog/api-key,DD_SITE=datadoghq.com}"
-
-# Polling Lambda
-aws lambda create-function \
-  --function-name datadog-aws-polling-metrics \
-  --runtime python3.12 \
-  --handler polling_function.lambda_handler \
-  --role arn:aws:iam::ACCOUNT_ID:role/datadog-metrics-lambda-role \
-  --zip-file fileb://polling_lambda.zip \
-  --timeout 120 \
-  --memory-size 256 \
-  --environment Variables="{DD_API_KEY_SECRET_ARN=arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:datadog/api-key,DD_SITE=datadoghq.com}"
-```
-
-### Create EventBridge Rules and Attach Lambda Targets
-
-The following pattern applies to every EventBridge rule defined in Method 3. Repeat for each rule, substituting the rule name, event pattern, and a unique `statement-id`.
-
-```bash
-# Create the EventBridge rule
+# Create the rule
 aws events put-rule \
-  --name "datadog-backup-job-failures" \
-  --event-pattern '{
-    "source": ["aws.backup"],
-    "detail-type": ["Backup Job State Change"],
-    "detail": { "state": ["FAILED","ABORTED","EXPIRED"] }
-  }' \
+  --name "RULE_NAME" \
+  --event-pattern 'EVENT_PATTERN_JSON' \
   --state ENABLED
 
-# Add the Lambda as the rule target
+# Add Lambda as the target
 aws events put-targets \
-  --rule "datadog-backup-job-failures" \
+  --rule "RULE_NAME" \
   --targets '[{
     "Id": "1",
     "Arn": "arn:aws:lambda:REGION:ACCOUNT_ID:function:datadog-aws-event-metrics"
@@ -811,47 +538,282 @@ aws events put-targets \
 # Grant EventBridge permission to invoke the Lambda
 aws lambda add-permission \
   --function-name datadog-aws-event-metrics \
-  --statement-id "allow-backup-rule" \
+  --statement-id "UNIQUE_STATEMENT_ID" \
   --action lambda:InvokeFunction \
   --principal events.amazonaws.com \
-  --source-arn arn:aws:events:REGION:ACCOUNT_ID:rule/datadog-backup-job-failures
+  --source-arn arn:aws:events:REGION:ACCOUNT_ID:rule/RULE_NAME
 ```
 
-### Attach the Polling Rule to the Polling Lambda
+Use the following event patterns for each rule.
+
+**AWS Backup:**
+
+```json
+{
+  "source": ["aws.backup"],
+  "detail-type": ["Backup Job State Change"],
+  "detail": { "state": ["FAILED", "ABORTED", "EXPIRED"] }
+}
+```
+
+**AWS Config:**
+
+```json
+{
+  "source": ["aws.config"],
+  "detail-type": ["Config Rules Compliance Change"],
+  "detail": {
+    "newEvaluationResult": { "complianceType": ["NON_COMPLIANT"] }
+  }
+}
+```
+
+**AWS DRS:**
+
+```json
+{
+  "source": ["aws.drs"]
+}
+```
+
+**AWS Control Tower:**
+
+```json
+{
+  "source": ["aws.controltower"]
+}
+```
+
+**Service Catalog (Control Tower account provisioning):**
+
+```json
+{
+  "source": ["aws.servicecatalog"],
+  "detail-type": ["AWS Service Event via CloudTrail"],
+  "detail": {
+    "eventName": ["ProvisionProduct", "UpdateProvisionedProduct"],
+    "errorCode": [{ "exists": true }]
+  }
+}
+```
+
+**SSM:**
+
+```json
+{
+  "source": ["aws.ssm"],
+  "detail-type": [
+    "EC2 Command Status-change Notification",
+    "EC2 Automation Execution Status-change Notification",
+    "EC2 Automation Step Status-change Notification"
+  ]
+}
+```
+
+**SSM Session Failures (via CloudTrail):**
+
+```json
+{
+  "source": ["aws.cloudtrail"],
+  "detail-type": ["AWS API Call via CloudTrail"],
+  "detail": {
+    "eventSource": ["ssm.amazonaws.com"],
+    "eventName": ["StartSession"],
+    "errorCode": [{ "exists": true }]
+  }
+}
+```
+
+> **Note for Control Tower:** Control Tower events originate in the management
+> account. Deploy the Lambda and EventBridge rules there, or configure
+> cross-account EventBridge event routing to forward `aws.controltower` events
+> to the account where the Lambda runs.
+
+---
+
+## Part 4: Scheduled Lambda for Polling-Based Metrics
+
+Three metrics require periodic API polling. These are handled by the
+`run_pollers()` function already included in the Lambda above.
+
+**Metrics covered:**
+- `aws.ssm.managed_instance.online`
+- `aws.ssm.patch.compliance`
+- `custom.drs.test.failures`
+
+Create a scheduled EventBridge rule to trigger the same Lambda on a fixed
+interval. The `source: aws.events` value in the event routes to `run_pollers()`
+inside the function.
 
 ```bash
+aws events put-rule \
+  --name "datadog-metrics-poller" \
+  --schedule-expression "rate(5 minutes)" \
+  --state ENABLED
+
 aws events put-targets \
   --rule "datadog-metrics-poller" \
   --targets '[{
     "Id": "1",
-    "Arn": "arn:aws:lambda:REGION:ACCOUNT_ID:function:datadog-aws-polling-metrics"
+    "Arn": "arn:aws:lambda:REGION:ACCOUNT_ID:function:datadog-aws-event-metrics"
   }]'
 
 aws lambda add-permission \
-  --function-name datadog-aws-polling-metrics \
-  --statement-id "allow-poller-rule" \
+  --function-name datadog-aws-event-metrics \
+  --statement-id "allow-scheduler" \
   --action lambda:InvokeFunction \
   --principal events.amazonaws.com \
   --source-arn arn:aws:events:REGION:ACCOUNT_ID:rule/datadog-metrics-poller
 ```
 
+Add the following permissions to the Lambda IAM role to allow API polling:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "ssm:DescribeInstanceInformation",
+    "ssm:ListComplianceItems",
+    "drs:DescribeJobs"
+  ],
+  "Resource": "*"
+}
+```
 
 ---
 
-## Verification
+## Part 5: Lambda Deployment
 
-After deploying all Lambda functions and EventBridge rules, confirm that metrics are reaching Datadog before creating monitors against them.
+### 5.1 IAM Role
 
-**Tail Lambda execution logs:**
+Create the Lambda execution role with the following trust policy and attach
+the required permissions.
+
+```bash
+aws iam create-role \
+  --role-name datadog-metrics-lambda-role \
+  --assume-role-policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Principal": { "Service": "lambda.amazonaws.com" },
+      "Action": "sts:AssumeRole"
+    }]
+  }'
+
+aws iam attach-role-policy \
+  --role-name datadog-metrics-lambda-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+aws iam put-role-policy \
+  --role-name datadog-metrics-lambda-role \
+  --policy-name datadog-metrics-permissions \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": "secretsmanager:GetSecretValue",
+        "Resource": "arn:aws:secretsmanager:*:*:secret:datadog/api-key*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "ssm:DescribeInstanceInformation",
+          "ssm:ListComplianceItems",
+          "drs:DescribeJobs"
+        ],
+        "Resource": "*"
+      }
+    ]
+  }'
+```
+
+### 5.2 Package and Deploy
+
+```bash
+zip metrics_lambda.zip lambda_function.py
+
+aws lambda create-function \
+  --function-name datadog-aws-event-metrics \
+  --runtime python3.12 \
+  --handler lambda_function.lambda_handler \
+  --role arn:aws:iam::ACCOUNT_ID:role/datadog-metrics-lambda-role \
+  --zip-file fileb://metrics_lambda.zip \
+  --timeout 60 \
+  --memory-size 256 \
+  --environment Variables="{
+    DD_API_KEY_SECRET_ARN=arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:datadog/api-key,
+    DD_SITE=datadoghq.com
+  }"
+```
+
+---
+
+## Part 6: Alternative Approaches
+
+For some of the metrics in this guide there are simpler options that reduce
+the amount of infrastructure and custom code required. Neither option replaces
+the full guide but each can cover a meaningful subset of the metrics.
+
+### Option A: Datadog Forwarder and Log-based Metrics
+
+The [Datadog Forwarder](https://docs.datadoghq.com/logs/guide/forwarder/) is a
+Datadog-maintained Lambda deployable from the AWS Serverless Application
+Repository in a single CloudFormation stack. Once deployed and subscribed to
+your CloudTrail log group, all log events flow directly into Datadog.
+
+You then create **Log-based Metrics** in the Datadog UI under
+**Logs > Generate Metrics** using filter queries, with no CloudWatch metric
+filter setup or custom namespace configuration required.
+
+This replaces Part 2 entirely for the following metrics:
+
+| Metric | Datadog Log Filter Query |
+|---|---|
+| `aws.cloudtrail.unauthorized_api_calls` | `source:cloudtrail @errorCode:(UnauthorizedOperation OR AccessDenied*)` |
+| `aws.cloudtrail.root_activity` | `source:cloudtrail @userIdentity.type:Root` |
+| `aws.organizations.scp.denied_requests` | `source:cloudtrail @errorCode:AccessDenied @errorMessage:*service\ control\ policy*` |
+| `aws.ssm.session.failed` | `source:cloudtrail @eventSource:ssm.amazonaws.com @eventName:StartSession @errorCode:*` |
+| `aws.controltower.*` | `source:cloudtrail @eventSource:controltower.amazonaws.com` |
+
+**Tradeoff:** Log ingestion into Datadog has its own cost implications
+depending on volume. Review the cost considerations section before choosing
+this path.
+
+### Option B: AWS Security Hub and Datadog Integration
+
+[AWS Security Hub](https://docs.datadoghq.com/integrations/amazon_security_hub/)
+aggregates findings from AWS Config, Control Tower guardrails, GuardDuty, and
+Inspector into a single service. The Datadog AWS integration can pull Security
+Hub findings natively, removing the need for custom Lambda code for individual
+compliance events.
+
+This can partially replace the Config and Control Tower sections of Part 3.
+
+| Metric | Security Hub Coverage |
+|---|---|
+| `aws.config.rule.non_compliant` | Config rule findings aggregated in Security Hub |
+| `aws.config.public_resource_detected` | Config rules surfaced as Security Hub findings |
+| `aws.controltower.guardrail.failed` | Control Tower compliance surfaced as findings |
+| `aws.controltower.logging.disabled` | Config-backed rules surfaced as Security Hub findings |
+
+**Tradeoff:** Security Hub findings are richer in context than raw numeric
+metrics but are not identical to CloudWatch-style timeseries. Monitor
+structures may need to be adapted to work with finding counts rather than
+gauge values.
+
+---
+
+## Part 7: Verification
+
+### Check Lambda Invocation Logs
 
 ```bash
 aws logs tail /aws/lambda/datadog-aws-event-metrics --follow
-aws logs tail /aws/lambda/datadog-aws-polling-metrics --follow
 ```
 
-A successful execution produces no errors. Authentication failures appear as `RuntimeError` messages referencing a Datadog API HTTP status code.
-
-**Send a test event to the event-driven Lambda:**
+### Send a Test Event
 
 ```bash
 aws lambda invoke \
@@ -870,107 +832,83 @@ aws lambda invoke \
   response.json && cat response.json
 ```
 
-**Verify in Datadog:**
+### Confirm Metrics in Datadog
 
-Go to **Metrics > Explorer** and search for the target metric name. Metrics submitted via the Datadog API typically appear within two to three minutes. CloudWatch custom namespace metrics (Methods 1 and 2) can take up to 15 minutes to appear after the namespace is first added.
+Navigate to **Metrics > Explorer** and search for the metric name. Custom
+metrics submitted via the API typically appear within two to three minutes.
+CloudWatch namespace metrics added in Part 1 and Part 2 can take up to 15
+minutes.
 
-If a metric does not appear after the expected window, check the following:
+If a metric does not appear, check:
 
-1. Lambda execution logs contain no errors.
-2. The Datadog API key in Secrets Manager is valid and has not been rotated without updating the secret value.
-3. The metric name in the Lambda code exactly matches what you are searching for in Datadog.
-4. The CloudWatch namespace has been saved in the Datadog AWS integration configuration (Methods 1 and 2).
-5. The EventBridge rule is in `ENABLED` state and the correct Lambda function ARN is set as the target.
+- Lambda CloudWatch Logs for errors in the function output
+- That the Datadog API key in Secrets Manager is stored as plaintext and is valid
+- That the EventBridge rule is in `ENABLED` state with the correct Lambda target ARN
+- That the metric name in the Lambda code exactly matches what you are searching for
 
 ---
 
-## Recommended Monitors
+## Part 8: Recommended Monitors
 
-Once data is flowing, the table below lists recommended starting thresholds for each metric. Create monitors under **Monitors > New Monitor > Metric** in Datadog, or define them as code using the [Datadog Terraform provider](https://registry.terraform.io/providers/DataDog/datadog/latest/docs/resources/monitor).
+Once data is flowing, the following monitors address the most operationally
+critical signals. Create them under **Monitors > New Monitor > Metric** in
+Datadog or define them using the
+[Datadog Terraform provider](https://registry.terraform.io/providers/DataDog/datadog/latest).
 
-| Metric | Recommended Condition | Rationale |
+| Monitor | Metric | Condition |
 |---|---|---|
-| `aws.drs.replication_lag` | Alert when value exceeds 300 seconds for any source server | Breach indicates RPO is at risk |
-| `aws.drs.recovery_point_age` | Alert when approaching defined RTO/RPO targets | Direct RPO breach indicator per source server |
-| `aws.drs.recovery_instance_ready` | Alert when gauge value is 0 for any source server | Instance not ready means recovery drills will fail |
-| `aws.backup.backupjobfailed` | Alert on any non-zero count in a 30-minute window | Backup failures require immediate investigation |
-| `aws.config.rule.non_compliant` | Alert on count increase above rolling baseline | Tracks introduction of new compliance violations |
-| `aws.config.public_resource_detected` | Alert on any non-zero count | Public resource exposure is a high-severity security finding |
-| `aws.cloudtrail.unauthorized_api_calls` | Alert using anomaly detection on rolling baseline | A spike may indicate reconnaissance activity or misconfigured permissions |
-| `aws.cloudtrail.root_activity` | Alert on any non-zero count | Root account activity should never occur in normal operations |
-| `aws.organizations.scp.denied_requests` | Alert on count spike above baseline | May indicate a misconfigured SCP or an unauthorised action attempt |
-| `aws.controltower.guardrail.failed` | Alert on any non-zero count | Guardrail failures represent governance violations |
-| `aws.controltower.account.drift` | Alert on any non-zero count | Drift means Control Tower has lost governance of that account's configuration |
-| `aws.controltower.logging.disabled` | Alert on any non-zero count | Loss of centralised logging is a compliance and security risk |
-| `aws.ssm.managed_instance.online` | Alert when gauge drops to 0 for any instance for more than one polling interval | Instance has lost connectivity to SSM |
-| `aws.ssm.patch.compliance` | Alert when average drops below agreed target, e.g. 90% | Tracks patch coverage across the managed fleet |
-| `aws.ssm.command.failed` | Alert when count exceeds expected baseline | Unexpected failures may indicate connectivity or permission issues |
-| `custom.drs.test.failures` | Alert on any non-zero count | Drill failures must be investigated before a real recovery event |
+| DRS replication lag | `aws.drs.replication_lag` | Alert when value exceeds 300 seconds for any source server |
+| Backup job failures | `aws.backup.backupjobfailed` | Alert when count is greater than zero over any 30-minute window |
+| Config non-compliance | `aws.config.rule.non_compliant` | Alert on count increase above baseline over 15 minutes |
+| Root account activity | `aws.cloudtrail.root_activity` | Alert immediately on any non-zero value |
+| Control Tower guardrail failures | `aws.controltower.guardrail.failed` | Alert on any non-zero count |
+| SCP denied requests | `aws.organizations.scp.denied_requests` | Alert on threshold breach indicating policy misconfiguration |
+| SSM patch compliance drop | `aws.ssm.patch.compliance` | Alert when average drops below your compliance target |
+| DRS test failures | `custom.drs.test.failures` | Alert on any non-zero count in a 24-hour window |
 
 ---
 
-## References
+## Part 9: Additional Cost Considerations
 
-### AWS Documentation
-
-| Resource | URL |
-|---|---|
-| AWS DRS Monitoring with CloudWatch | https://docs.aws.amazon.com/drs/latest/userguide/monitoring-cloudwatch.html |
-| AWS DRS DescribeJobs API | https://docs.aws.amazon.com/drs/latest/APIReference/API_DescribeJobs.html |
-| AWS Backup EventBridge Notifications | https://docs.aws.amazon.com/aws-backup/latest/devguide/eventbridge.html |
-| AWS Config EventBridge Integration | https://docs.aws.amazon.com/config/latest/developerguide/monitor-config-with-cloudwatchevents.html |
-| CloudWatch Logs Metric Filters | https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/MonitoringLogData.html |
-| CloudWatch Logs Filter Pattern Syntax | https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/FilterAndPatternSyntax.html |
-| AWS CloudTrail Log Event Reference | https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference.html |
-| AWS Control Tower Lifecycle Events | https://docs.aws.amazon.com/controltower/latest/userguide/lifecycle-events.html |
-| AWS Organizations Service Control Policies | https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html |
-| AWS Systems Manager EventBridge Events | https://docs.aws.amazon.com/systems-manager/latest/userguide/monitoring-eventbridge-events.html |
-| SSM DescribeInstanceInformation API | https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_DescribeInstanceInformation.html |
-| SSM ListComplianceItems API | https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_ListComplianceItems.html |
-| Amazon EventBridge Rules | https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules.html |
-| AWS Lambda Deployment Packages | https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-package.html |
-| AWS Secrets Manager | https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html |
-
-### Datadog Documentation
-
-| Resource | URL |
-|---|---|
-| Datadog AWS Integration | https://docs.datadoghq.com/integrations/amazon_web_services/ |
-| Datadog Metrics Submission API | https://docs.datadoghq.com/api/latest/metrics/ |
-| Datadog Custom Metrics | https://docs.datadoghq.com/metrics/custom_metrics/ |
-| Datadog Monitor Creation | https://docs.datadoghq.com/monitors/create/ |
-| Datadog NVIDIA DCGM Integration | https://docs.datadoghq.com/integrations/nvidia_dcgm/ |
-| Datadog Terraform Provider — Monitor Resource | https://registry.terraform.io/providers/DataDog/datadog/latest/docs/resources/monitor |
-
-## Additional Cost Considerations
-
-The following areas can contribute to increased costs when implementing this integration.
-No exact figures are provided as costs will vary by account activity and data volume.
+The following areas can contribute to increased costs when implementing this
+integration. No exact figures are provided as costs vary by account activity
+and data volume.
 
 ### Datadog Custom Metrics
-- Every metric submitted via the Datadog API counts as a custom metric against your Datadog quota
-- High-cardinality tags such as `instance_id`, `resource_id`, and `execution_id` multiply the
-  number of unique metric timeseries and are the most likely source of unexpected cost spikes
-- Scheduled Lambda functions that report per-instance metrics (SSM patch compliance,
-  managed instance status) can generate a large number of timeseries at scale
+- Every metric submitted via the Datadog API counts as a custom metric against
+  your Datadog quota
+- High-cardinality tags such as `instance_id`, `resource_id`, and
+  `execution_id` multiply the number of unique metric timeseries and are the
+  most likely source of unexpected cost spikes
+- Scheduled Lambda functions that report per-instance metrics (SSM patch
+  compliance, managed instance status) can generate a large number of
+  timeseries at scale
 
 ### AWS Lambda
 - Event-driven Lambdas are low cost at normal alert volumes
-- A spike in Config non-compliance events, SSM command failures, or Control Tower
-  guardrail violations will trigger a corresponding spike in Lambda invocations
-- Scheduled Lambdas (every 5 minutes) run continuously regardless of activity
+- A spike in Config non-compliance events, SSM command failures, or Control
+  Tower guardrail violations triggers a corresponding spike in Lambda
+  invocations
+- Scheduled Lambdas run continuously regardless of activity level
 
 ### AWS CloudWatch
-- CloudWatch Logs metric filters are free to create, but the custom metrics they
-  publish are billed as CloudWatch custom metrics
+- CloudWatch Logs metric filters are free to create but the custom metrics
+  they publish are billed as CloudWatch custom metrics
 - CloudTrail log ingestion and storage costs apply if not already accounted for
 
 ### AWS Secrets Manager
 - Each Lambda invocation calls Secrets Manager to retrieve the Datadog API key
-- At high invocation rates this adds up; consider caching the secret within the
-  Lambda execution context to reduce API calls
+- At high invocation rates this adds up; consider caching the secret value
+  within the Lambda execution context to reduce API calls
 
 ### AWS EventBridge
 - Events processed on the default event bus from AWS services are free
-- Cross-account event routing through a custom event bus incurs a per-event charge
-  and should be reviewed if forwarding Control Tower events across many accounts
+- Cross-account event routing through a custom event bus incurs a per-event
+  charge and should be reviewed if forwarding Control Tower events across
+  many accounts
+
+### Datadog Log Ingestion (Option A only)
+- Forwarding CloudTrail logs to Datadog via the Forwarder increases log
+  ingestion volume which is billed based on the Datadog log management plan
+- Apply log exclusion filters in the Forwarder configuration to limit ingestion
+  to only the event types needed for the metrics defined in this guideAdd to Conversation
