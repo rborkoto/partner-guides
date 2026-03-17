@@ -940,3 +940,36 @@ Once data is flowing, the table below lists recommended starting thresholds for 
 | Datadog Monitor Creation | https://docs.datadoghq.com/monitors/create/ |
 | Datadog NVIDIA DCGM Integration | https://docs.datadoghq.com/integrations/nvidia_dcgm/ |
 | Datadog Terraform Provider — Monitor Resource | https://registry.terraform.io/providers/DataDog/datadog/latest/docs/resources/monitor |
+
+## Additional Cost Considerations
+
+The following areas can contribute to increased costs when implementing this integration.
+No exact figures are provided as costs will vary by account activity and data volume.
+
+### Datadog Custom Metrics
+- Every metric submitted via the Datadog API counts as a custom metric against your Datadog quota
+- High-cardinality tags such as `instance_id`, `resource_id`, and `execution_id` multiply the
+  number of unique metric timeseries and are the most likely source of unexpected cost spikes
+- Scheduled Lambda functions that report per-instance metrics (SSM patch compliance,
+  managed instance status) can generate a large number of timeseries at scale
+
+### AWS Lambda
+- Event-driven Lambdas are low cost at normal alert volumes
+- A spike in Config non-compliance events, SSM command failures, or Control Tower
+  guardrail violations will trigger a corresponding spike in Lambda invocations
+- Scheduled Lambdas (every 5 minutes) run continuously regardless of activity
+
+### AWS CloudWatch
+- CloudWatch Logs metric filters are free to create, but the custom metrics they
+  publish are billed as CloudWatch custom metrics
+- CloudTrail log ingestion and storage costs apply if not already accounted for
+
+### AWS Secrets Manager
+- Each Lambda invocation calls Secrets Manager to retrieve the Datadog API key
+- At high invocation rates this adds up; consider caching the secret within the
+  Lambda execution context to reduce API calls
+
+### AWS EventBridge
+- Events processed on the default event bus from AWS services are free
+- Cross-account event routing through a custom event bus incurs a per-event charge
+  and should be reviewed if forwarding Control Tower events across many accounts
