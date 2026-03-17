@@ -426,15 +426,6 @@ aws s3api put-bucket-lifecycle-configuration \
 
 If you plan to use the Security Hub integration (Part 3) for Config and Control Tower compliance metrics, Security Hub must be enabled. However, note that Security Hub provides findings (logs), not direct metrics. For metric-based alerting, the Lambda approach in Part 4 is recommended.
 
-### 8.1 Enable Security Hub (If Using Part 3)
-
-```bash
-aws securityhub enable-security-hub \
-  --enable-default-standards \
-  --region YOUR_REGION
-```
-
-> **Note:** Security Hub is only required if you choose to use Part 3 (Security Hub integration). If you use Part 4 (Lambda approach) for compliance metrics, Security Hub is not required.
 
 ---
 
@@ -449,4 +440,3 @@ Before moving to the main guide, confirm each item below is complete.
 - [ ] Python 3.12 runtime is available and approved in your environment
 - [ ] AWS CLI is installed, configured, and `get-caller-identity` returns the expected account
 - [ ] (Optional) S3 bucket created for CloudWatch Metric Streams backup if using Part 1, Option A
-- [ ] (Optional) Security Hub enabled if using Part 3 (Security Hub integration approach)
