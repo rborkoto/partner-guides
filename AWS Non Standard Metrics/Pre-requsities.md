@@ -1,23 +1,18 @@
 # Prerequisites Guide
 
-This document covers everything that must be in place before following the
-metrics import guide. Work through each section in order before proceeding
-with any configuration steps.
+This document covers everything that must be in place before following the metrics import guide. Work through each section in order before proceeding with any configuration steps.
 
 ---
 
 ## 1. Datadog AWS Integration with IAM Cross-Account Role
 
-Datadog accesses your AWS account using a cross-account IAM role. You create
-the role in your AWS account and provide the role ARN to Datadog.
+Datadog accesses your AWS account using a cross-account IAM role. You create the role in your AWS account and provide the role ARN to Datadog.
 
 ### 1.1 Create the IAM Role
 
-In your AWS account, create a new IAM role with the following trust policy.
-Replace `YOUR_DATADOG_EXTERNAL_ID` with the External ID shown in the Datadog
-AWS integration tile under **Integrations > Amazon Web Services > Add Account**.
+In your AWS account, create a new IAM role with the following trust policy. Replace `YOUR_DATADOG_EXTERNAL_ID` with the External ID shown in the Datadog AWS integration tile under **Integrations > Amazon Web Services > Add Account**.
 
-
+```json
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -35,12 +30,14 @@ AWS integration tile under **Integrations > Amazon Web Services > Add Account**.
     }
   ]
 }
+```
 
+### 1.2 Attach the Required Policy
 
-1.2 Attach the Required Policy
-Attach the AWS managed policy SecurityAudit and the following inline policy
-to allow Datadog to collect metrics and resource data.
-jsonCopy{
+Attach the AWS managed policy `SecurityAudit` and the following inline policy to allow Datadog to collect metrics and resource data.
+
+```json
+{
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -57,28 +54,41 @@ jsonCopy{
     }
   ]
 }
-For the full list of permissions required by the Datadog integration, refer to
-the Datadog AWS Integration IAM documentation.
-1.3 Register the Role in Datadog
+```
 
-In Datadog go to Integrations > Amazon Web Services
-Select Add AWS Account
-Enter your AWS Account ID and the name of the IAM role you created
-Save and verify the integration status shows as green
+For the full list of permissions required by the Datadog integration, refer to the [Datadog AWS Integration IAM documentation](https://docs.datadoghq.com/integrations/amazon_web_services/?tab=roledelegation#iam-role).
 
-1.4 Verify
-bashCopyaws sts get-caller-identity
-Confirm the integration is active in Datadog by checking that AWS host data
-begins appearing under Infrastructure > Host Map within 15 minutes.
+### 1.3 Register the Role in Datadog
 
-2. AWS CloudTrail with CloudWatch Logs Delivery
-CloudTrail must be configured to deliver log events to a CloudWatch Logs log
-group. This is required for the metric filter approach used by several metrics
-in this guide.
-2.1 Confirm an Active Trail
-bashCopyaws cloudtrail describe-trails --include-shadow-trails false
+1. In Datadog, go to **Integrations > Amazon Web Services**
+2. Select **Add AWS Account**
+3. Enter your AWS Account ID and the name of the IAM role you created
+4. Save and verify the integration status shows as green
+
+### 1.4 Verify
+
+```bash
+aws sts get-caller-identity
+```
+
+Confirm the integration is active in Datadog by checking that AWS host data begins appearing under **Infrastructure > Host Map** within 15 minutes.
+
+---
+
+## 2. AWS CloudTrail with CloudWatch Logs Delivery
+
+CloudTrail must be configured to deliver log events to a CloudWatch Logs log group. This is required for the metric filter approach used by several metrics in this guide.
+
+### 2.1 Confirm an Active Trail
+
+```bash
+aws cloudtrail describe-trails --include-shadow-trails false
+```
+
 If no trails are returned, create one:
-bashCopyaws cloudtrail create-trail \
+
+```bash
+aws cloudtrail create-trail \
   --name organisation-audit-trail \
   --s3-bucket-name YOUR_CLOUDTRAIL_S3_BUCKET \
   --is-multi-region-trail \
@@ -86,11 +96,20 @@ bashCopyaws cloudtrail create-trail \
 
 aws cloudtrail start-logging \
   --name organisation-audit-trail
-2.2 Create a CloudWatch Logs Log Group
-bashCopyaws logs create-log-group --log-group-name /aws/cloudtrail/audit-logs
-2.3 Create an IAM Role for CloudTrail to Write to CloudWatch Logs
+```
+
+### 2.2 Create a CloudWatch Logs Log Group
+
+```bash
+aws logs create-log-group --log-group-name /aws/cloudtrail/audit-logs
+```
+
+### 2.3 Create an IAM Role for CloudTrail to Write to CloudWatch Logs
+
 CloudTrail requires its own IAM role to deliver events to CloudWatch Logs.
-bashCopyaws iam create-role \
+
+```bash
+aws iam create-role \
   --role-name CloudTrailCloudWatchRole \
   --assume-role-policy-document '{
     "Version": "2012-10-17",
@@ -115,27 +134,37 @@ aws iam put-role-policy \
       "Resource": "arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/cloudtrail/audit-logs:*"
     }]
   }'
-2.4 Associate the Log Group with the Trail
-bashCopyaws cloudtrail update-trail \
+```
+
+### 2.4 Associate the Log Group with the Trail
+
+```bash
+aws cloudtrail update-trail \
   --name organisation-audit-trail \
   --cloud-watch-logs-log-group-arn arn:aws:logs:REGION:ACCOUNT_ID:log-group:/aws/cloudtrail/audit-logs \
   --cloud-watch-logs-role-arn arn:aws:iam::ACCOUNT_ID:role/CloudTrailCloudWatchRole
-2.5 Verify
-bashCopyaws cloudtrail get-trail-status --name organisation-audit-trail
-Confirm IsLogging is true and LatestCloudWatchLogsDeliveryTime shows a
-recent timestamp.
+```
 
-Note for multi-account setups: SCP-related CloudTrail events originate
-in the management account. The trail and log group for
-aws.organizations.scp.denied_requests must be configured in the
-management account, not a member account.
+### 2.5 Verify
 
+```bash
+aws cloudtrail get-trail-status --name organisation-audit-trail
+```
 
-3. IAM Permissions for Resource Creation
-The IAM principal (user or role) running the deployment steps in this guide
-requires permissions to create and manage the following resource types.
-3.1 Required Permissions
-jsonCopy{
+Confirm `IsLogging` is `true` and `LatestCloudWatchLogsDeliveryTime` shows a recent timestamp.
+
+> **Note for multi-account setups:** SCP-related CloudTrail events originate in the management account. The trail and log group for `aws.organizations.scp.denied_requests` must be configured in the management account, not a member account.
+
+---
+
+## 3. IAM Permissions for Resource Creation
+
+The IAM principal (user or role) running the deployment steps in this guide requires permissions to create and manage the following resource types.
+
+### 3.1 Required Permissions
+
+```json
+{
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -197,79 +226,124 @@ jsonCopy{
     }
   ]
 }
-3.2 Verify Your Current Permissions
-bashCopyaws iam simulate-principal-policy \
+```
+
+### 3.2 Verify Your Current Permissions
+
+```bash
+aws iam simulate-principal-policy \
   --policy-source-arn arn:aws:iam::ACCOUNT_ID:user/YOUR_USER \
   --action-names lambda:CreateFunction events:PutRule logs:PutMetricFilter \
   --resource-arns "*"
+```
 
-4. Datadog API Key in AWS Secrets Manager
-The Lambda functions in this guide retrieve the Datadog API key from Secrets
-Manager at runtime. The secret must be stored as a plaintext string, not as a
-JSON key-value pair.
-4.1 Retrieve Your Datadog API Key
-In Datadog go to Organization Settings > API Keys and copy an existing key
-or create a new one scoped for this integration.
-4.2 Store the Secret
-bashCopyaws secretsmanager create-secret \
+---
+
+## 4. Datadog API Key in AWS Secrets Manager
+
+The Lambda functions in this guide retrieve the Datadog API key from Secrets Manager at runtime. The secret must be stored as a plaintext string, not as a JSON key-value pair.
+
+### 4.1 Retrieve Your Datadog API Key
+
+In Datadog, go to **Organization Settings > API Keys** and copy an existing key or create a new one scoped for this integration.
+
+### 4.2 Store the Secret
+
+```bash
+aws secretsmanager create-secret \
   --name datadog/api-key \
   --description "Datadog API key for AWS metrics Lambda functions" \
   --secret-string "YOUR_DATADOG_API_KEY_VALUE"
-Note the ARN returned by this command. You will need it when setting the
-DD_API_KEY_SECRET_ARN environment variable on each Lambda function.
-4.3 Verify
-bashCopyaws secretsmanager get-secret-value \
+```
+
+> **Note:** Note the ARN returned by this command. You will need it when setting the `DD_API_KEY_SECRET_ARN` environment variable on each Lambda function.
+
+### 4.3 Verify
+
+```bash
+aws secretsmanager get-secret-value \
   --secret-id datadog/api-key \
   --query SecretString \
   --output text
-The raw API key value should be returned. If JSON is returned instead, the
-secret was stored incorrectly and the Lambda functions will fail to
-authenticate with Datadog.
+```
 
-5. Python 3.12 Runtime for Lambda
-All Lambda functions in this guide target the Python 3.12 runtime. No
-additional libraries beyond the AWS SDK (boto3) and the Python standard
-library are required, as both are included in the Lambda execution environment
-by default.
-5.1 Verify Python Version Availability in Your Region
-bashCopyaws lambda list-layers \
+The raw API key value should be returned. If JSON is returned instead, the secret was stored incorrectly and the Lambda functions will fail to authenticate with Datadog.
+
+---
+
+## 5. Python 3.12 Runtime for Lambda
+
+All Lambda functions in this guide target the Python 3.12 runtime. No additional libraries beyond the AWS SDK (boto3) and the Python standard library are required, as both are included in the Lambda execution environment by default.
+
+### 5.1 Verify Python Version Availability in Your Region
+
+```bash
+aws lambda list-layers \
   --compatible-runtime python3.12 \
   --region YOUR_REGION
-Python 3.12 is available in all commercial AWS regions. If your environment
-enforces a specific approved runtime list, confirm Python 3.12 is on it before
-proceeding.
+```
 
-6. AWS CLI Configuration
-All deployment commands in this guide use the AWS CLI. Confirm it is installed
-and configured before proceeding.
-6.1 Install the AWS CLI
-Follow the official installation guide
-for your operating system, or verify an existing installation:
-bashCopyaws --version
+Python 3.12 is available in all commercial AWS regions. If your environment enforces a specific approved runtime list, confirm Python 3.12 is on it before proceeding.
+
+---
+
+## 6. AWS CLI Configuration
+
+All deployment commands in this guide use the AWS CLI. Confirm it is installed and configured before proceeding.
+
+### 6.1 Install the AWS CLI
+
+Follow the [official installation guide](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) for your operating system, or verify an existing installation:
+
+```bash
+aws --version
+```
+
 The output should show version 2.x or higher.
-6.2 Configure Credentials
-bashCopyaws configure
-You will be prompted for:
-FieldValueAWS Access Key IDYour IAM user or assumed role access keyAWS Secret Access KeyCorresponding secret keyDefault region nameThe AWS region where resources will be deployedDefault output formatjson
-6.3 Verify the Active Identity
-bashCopyaws sts get-caller-identity
-Confirm the returned Account, UserId, and Arn match the account and
-principal you intend to use for this deployment.
-6.4 Multi-Account Deployments
-If you are deploying resources across multiple accounts (for example, placing
-the Control Tower event rules in the management account while the Lambda runs
-in a workload account), configure named profiles for each account:
-bashCopyaws configure --profile management-account
-aws configure --profile workload-account
-Pass --profile PROFILE_NAME to each CLI command where the target account
-differs from your default.
 
-Prerequisites Checklist
+### 6.2 Configure Credentials
+
+```bash
+aws configure
+```
+
+You will be prompted for:
+
+| Field | Value |
+|---|---|
+| AWS Access Key ID | Your IAM user or assumed role access key |
+| AWS Secret Access Key | Corresponding secret key |
+| Default region name | The AWS region where resources will be deployed |
+| Default output format | `json` |
+
+### 6.3 Verify the Active Identity
+
+```bash
+aws sts get-caller-identity
+```
+
+Confirm the returned `Account`, `UserId`, and `Arn` match the account and principal you intend to use for this deployment.
+
+### 6.4 Multi-Account Deployments
+
+If you are deploying resources across multiple accounts (for example, placing the Control Tower event rules in the management account while the Lambda runs in a workload account), configure named profiles for each account:
+
+```bash
+aws configure --profile management-account
+aws configure --profile workload-account
+```
+
+Pass `--profile PROFILE_NAME` to each CLI command where the target account differs from your default.
+
+---
+
+## Prerequisites Checklist
+
 Before moving to the main guide, confirm each item below is complete.
 
- Datadog AWS integration is active and showing green in the integration tile
- CloudTrail trail is enabled, logging, and delivering to a CloudWatch Logs log group
- Your deployment principal has the IAM permissions listed in Section 3
- Datadog API key is stored as a plaintext secret in Secrets Manager and the ARN is noted
- Python 3.12 runtime is available and approved in your environment
- AWS CLI is installed, configured, and get-caller-identity returns the expected account
+- [ ] Datadog AWS integration is active and showing green in the integration tile
+- [ ] CloudTrail trail is enabled, logging, and delivering to a CloudWatch Logs log group
+- [ ] Your deployment principal has the IAM permissions listed in Section 3
+- [ ] Datadog API key is stored as a plaintext secret in Secrets Manager and the ARN is noted
+- [ ] Python 3.12 runtime is available and approved in your environment
+- [ ] AWS CLI is installed, configured, and `get-caller-identity` returns the expected account
