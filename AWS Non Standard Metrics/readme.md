@@ -1,4 +1,3 @@
-```markdown
 # Importing Non-Standard AWS Metrics into Datadog
 
 ## Table of Contents
