@@ -20,21 +20,25 @@ simpler path exists.
 
 ## Multi-Account Setup Considerations
 
-Several metrics in this guide require configuration in specific AWS accounts:
+Several metrics in this guide require configuration in specific AWS accounts.
 
 | Metric | Account Requirement | Notes |
 |---|---|---|
 | `aws.organizations.scp.denied_requests` | Management account | CloudTrail log group must be in management account |
 | `aws.controltower.landingzone.health` | Management account | Control Tower events originate in management account |
 | `aws.controltower.account.drift` | Management account | Control Tower events originate in management account |
-| `aws.controltower.guardrail.failed` | Management account | Security Hub findings from Control Tower are in management account |
+| `aws.controltower.guardrail.failed` | Management account | Control Tower events and Security Hub findings originate in management account |
 | `aws.controltower.account.provisioning_failed` | Management account | Service Catalog events for Control Tower are in management account |
+| `aws.controltower.logging.disabled` | Management account | Control Tower managed Config rules are evaluated in management account |
 
 **For multi-account deployments:**
 - Deploy the Datadog Forwarder in the management account for SCP metrics (Part 2)
-- Deploy Lambda functions and EventBridge rules in the management account for Control Tower metrics (Part 4)
-- Configure cross-account EventBridge routing if you prefer to centralize Lambda execution in a single account
-- Security Hub integration should be enabled in both management and member accounts if you need Config compliance metrics from member accounts
+- Deploy Lambda functions and EventBridge rules in the management account for
+  Control Tower metrics (Part 4)
+- Configure cross-account EventBridge routing if you prefer to centralise
+  Lambda execution in a single account
+- Enable Security Hub in both management and member accounts if you need Config
+  compliance metrics from member accounts
 
 ---
 
@@ -42,26 +46,26 @@ Several metrics in this guide require configuration in specific AWS accounts:
 
 | Metric | AWS Source | Recommended Method |
 |---|---|---|
-| `aws.drs.replication_lag` | CloudWatch `AWS/DRS` | CloudWatch Metric Streams |
-| `aws.drs.recovery_point_age` | CloudWatch `AWS/DRS` | CloudWatch Metric Streams |
-| `aws.drs.recovery_instance_ready` | DRS EventBridge events | Lambda and API |
-| `aws.backup.backupjobfailed` | Backup EventBridge events | Lambda and API |
-| `custom.drs.test.failures` | DRS API | Scheduled Lambda |
-| `aws.config.rule.non_compliant` | Config via Security Hub | Security Hub integration + log-based metrics (or Lambda in Part 4) |
-| `aws.config.public_resource_detected` | Config via Security Hub | Security Hub integration + log-based metrics (or Lambda in Part 4) |
-| `aws.cloudtrail.unauthorized_api_calls` | CloudTrail Logs | Forwarder and log-based metric |
-| `aws.cloudtrail.root_activity` | CloudTrail Logs | Forwarder and log-based metric |
-| `aws.organizations.scp.denied_requests` | CloudTrail Logs (management account) | Forwarder and log-based metric |
-| `aws.controltower.landingzone.health` | Control Tower EventBridge | Lambda and API |
-| `aws.controltower.account.drift` | Control Tower EventBridge | Lambda and API |
-| `aws.controltower.guardrail.failed` | Control Tower via Security Hub | Security Hub integration + log-based metrics (or Lambda in Part 4) |
-| `aws.controltower.account.provisioning_failed` | Service Catalog EventBridge | Lambda and API |
-| `aws.controltower.logging.disabled` | Config via Security Hub | Security Hub integration + log-based metrics (or Lambda in Part 4) |
-| `aws.ssm.managed_instance.online` | SSM API | Scheduled Lambda |
-| `aws.ssm.patch.compliance` | SSM API | Scheduled Lambda |
-| `aws.ssm.command.failed` | SSM EventBridge events | Lambda and API |
-| `aws.ssm.automation.failed` | SSM EventBridge events | Lambda and API |
-| `aws.ssm.session.failed` | CloudTrail Logs | Forwarder and log-based metric |
+| `aws.drs.replication_lag` | CloudWatch `AWS/DRS` | Part 1: CloudWatch Metric Streams |
+| `aws.drs.recovery_point_age` | CloudWatch `AWS/DRS` | Part 1: CloudWatch Metric Streams |
+| `aws.drs.recovery_instance_ready` | DRS EventBridge events | Part 4: Lambda and API |
+| `aws.backup.backupjobfailed` | Backup EventBridge events | Part 4: Lambda and API |
+| `custom.drs.test.failures` | DRS API | Part 5: Scheduled Lambda |
+| `aws.config.rule.non_compliant` | Config EventBridge or Security Hub | Part 4: Lambda (alerting), Part 3: Security Hub (compliance reporting) |
+| `aws.config.public_resource_detected` | Config EventBridge or Security Hub | Part 4: Lambda (alerting), Part 3: Security Hub (compliance reporting) |
+| `aws.cloudtrail.unauthorized_api_calls` | CloudTrail Logs | Part 2: Forwarder and log-based metric |
+| `aws.cloudtrail.root_activity` | CloudTrail Logs | Part 2: Forwarder and log-based metric |
+| `aws.organizations.scp.denied_requests` | CloudTrail Logs (management account) | Part 2: Forwarder and log-based metric |
+| `aws.controltower.landingzone.health` | Control Tower EventBridge | Part 4: Lambda and API |
+| `aws.controltower.account.drift` | Control Tower EventBridge | Part 4: Lambda and API |
+| `aws.controltower.guardrail.failed` | Control Tower EventBridge or Security Hub | Part 4: Lambda (alerting), Part 3: Security Hub (compliance reporting) |
+| `aws.controltower.account.provisioning_failed` | Service Catalog EventBridge | Part 4: Lambda and API |
+| `aws.controltower.logging.disabled` | Config EventBridge or Security Hub | Part 4: Lambda (alerting), Part 3: Security Hub (compliance reporting) |
+| `aws.ssm.managed_instance.online` | SSM API | Part 5: Scheduled Lambda |
+| `aws.ssm.patch.compliance` | SSM API | Part 5: Scheduled Lambda |
+| `aws.ssm.command.failed` | SSM EventBridge events | Part 4: Lambda and API |
+| `aws.ssm.automation.failed` | SSM EventBridge events | Part 4: Lambda and API |
+| `aws.ssm.session.failed` | CloudTrail Logs | Part 2: Forwarder and log-based metric |
 
 ---
 
@@ -70,36 +74,37 @@ Several metrics in this guide require configuration in specific AWS accounts:
 Use this table to identify which parts of this guide apply to your setup
 before proceeding.
 
-| Metric Group | Recommended Path | Fallback Path |
+| Metric Group | Recommended Path | Alternative Path |
 |---|---|---|
-| DRS CloudWatch namespace metrics | Part 1 (Metric Streams) | Part 1 Alternative (Lambda polling) |
+| DRS CloudWatch namespace metrics | Part 1 (Metric Streams) | Part 1 Option B (Lambda polling) |
 | CloudTrail log-derived metrics | Part 2 (Forwarder) | Part 2 Alternative (metric filters) |
-| Config and Control Tower compliance | Part 4 (Lambda - recommended for metrics) | Part 3 (Security Hub + log-based metrics) |
+| Config and Control Tower compliance metrics for alerting | Part 4 (Lambda) | Not applicable |
+| Config and Control Tower compliance for reporting and investigation | Part 3 (Security Hub) | Not applicable |
 | Backup, DRS events, CT provisioning, SSM events | Part 4 (Lambda) | Not applicable |
-| SSM state, DRS test failures | Part 5 (Scheduled Lambda) | Not applicable |
+| SSM state and DRS test failures | Part 5 (Scheduled Lambda) | Not applicable |
 
-| Metric | Covered In |
-|---|---|
-| `aws.drs.replication_lag` | Part 1 |
-| `aws.drs.recovery_point_age` | Part 1 |
-| `aws.cloudtrail.unauthorized_api_calls` | Part 2 |
-| `aws.cloudtrail.root_activity` | Part 2 |
-| `aws.organizations.scp.denied_requests` | Part 2 |
-| `aws.ssm.session.failed` | Part 2 |
-| `aws.config.rule.non_compliant` | Part 3 |
-| `aws.config.public_resource_detected` | Part 3 |
-| `aws.controltower.guardrail.failed` | Part 3 |
-| `aws.controltower.logging.disabled` | Part 3 |
-| `aws.backup.backupjobfailed` | Part 4 |
-| `aws.drs.recovery_instance_ready` | Part 4 |
-| `aws.controltower.landingzone.health` | Part 4 |
-| `aws.controltower.account.drift` | Part 4 |
-| `aws.controltower.account.provisioning_failed` | Part 4 |
-| `aws.ssm.command.failed` | Part 4 |
-| `aws.ssm.automation.failed` | Part 4 |
-| `aws.ssm.managed_instance.online` | Part 5 |
-| `aws.ssm.patch.compliance` | Part 5 |
-| `custom.drs.test.failures` | Part 5 |
+| Metric | Primary Part | Also Covered In |
+|---|---|---|
+| `aws.drs.replication_lag` | Part 1 | |
+| `aws.drs.recovery_point_age` | Part 1 | |
+| `aws.cloudtrail.unauthorized_api_calls` | Part 2 | |
+| `aws.cloudtrail.root_activity` | Part 2 | |
+| `aws.organizations.scp.denied_requests` | Part 2 | |
+| `aws.ssm.session.failed` | Part 2 | |
+| `aws.config.rule.non_compliant` | Part 4 (alerting) | Part 3 (reporting) |
+| `aws.config.public_resource_detected` | Part 4 (alerting) | Part 3 (reporting) |
+| `aws.controltower.guardrail.failed` | Part 4 (alerting) | Part 3 (reporting) |
+| `aws.controltower.logging.disabled` | Part 4 (alerting) | Part 3 (reporting) |
+| `aws.backup.backupjobfailed` | Part 4 | |
+| `aws.drs.recovery_instance_ready` | Part 4 | |
+| `aws.controltower.landingzone.health` | Part 4 | |
+| `aws.controltower.account.drift` | Part 4 | |
+| `aws.controltower.account.provisioning_failed` | Part 4 | |
+| `aws.ssm.command.failed` | Part 4 | |
+| `aws.ssm.automation.failed` | Part 4 | |
+| `aws.ssm.managed_instance.online` | Part 5 | |
+| `aws.ssm.patch.compliance` | Part 5 | |
+| `custom.drs.test.failures` | Part 5 | |
 
 ---
 
@@ -121,7 +126,7 @@ requires no custom code and covers any namespace automatically.
 
 **Step 1: Create the required IAM roles**
 
-Role for Kinesis Data Firehose to write to S3 and call the Datadog endpoint:
+Role for Kinesis Data Firehose to deliver to the Datadog endpoint:
 
 ```bash
 aws iam create-role \
@@ -240,47 +245,15 @@ a few minutes.
 
 ### Option B: Lambda Polling CloudWatch (Fallback)
 
-If Metric Streams cannot be used in your environment, add the following
-function to the Lambda defined in Part 4. It polls CloudWatch for DRS metrics
-on the same schedule as the other pollers.
+If Metric Streams cannot be used in your environment, the Lambda in Part 4
+includes a `poll_drs_cloudwatch_metrics()` function that polls CloudWatch for
+DRS metrics on the same schedule as the other pollers.
 
-```python
-def poll_drs_cloudwatch_metrics():
-    cw = boto3.client("cloudwatch")
-    drs_client = boto3.client("drs")
-    paginator = drs_client.get_paginator("describe_source_servers")
+This function is already included in the Lambda code in Part 4. To enable it:
 
-    for page in paginator.paginate():
-        for server in page.get("items", []):
-            server_id = server.get("sourceServerID", "unknown")
-
-            end_time = datetime.now(timezone.utc)
-            start_time = end_time - timedelta(minutes=5)
-
-            for cw_name, dd_name in [
-                ("ReplicationLag", "aws.drs.replication_lag"),
-                ("RecoveryPointAge", "aws.drs.recovery_point_age"),
-            ]:
-                response = cw.get_metric_statistics(
-                    Namespace="AWS/DRS",
-                    MetricName=cw_name,
-                    Dimensions=[
-                        {"Name": "SourceServerID", "Value": server_id}
-                    ],
-                    StartTime=start_time,
-                    EndTime=end_time,
-                    Period=300,
-                    Statistics=["Average"]
-                )
-                datapoints = response.get("Datapoints", [])
-                if datapoints:
-                    value = datapoints[-1]["Average"]
-                    tags = [f"source_server_id:{server_id}"]
-                    submit_metric(dd_name, value, tags, "gauge")
-```
-
-Add `poll_drs_cloudwatch_metrics()` to `run_pollers()` and include the
-following additional permissions on the Lambda IAM role:
+1. Follow Part 4 and Part 6 to deploy the Lambda
+2. Ensure the scheduled rule from Part 5 is active
+3. Confirm the Lambda IAM role includes the following permissions:
 
 ```json
 {
@@ -293,6 +266,12 @@ following additional permissions on the Lambda IAM role:
   "Resource": "*"
 }
 ```
+
+These permissions are already included in the IAM policy defined in Part 6.
+
+> If you are using Option A (Metric Streams), remove or comment out the
+> `poll_drs_cloudwatch_metrics()` call inside `run_pollers()` in the Lambda
+> to avoid duplicate metric submissions.
 
 ---
 
@@ -307,14 +286,14 @@ in the Datadog UI under a different name.
 4. Search the services list for `Disaster Recovery` or `DRS`
 
 **If DRS is found:**
-- Check the box to enable it
-- Save the configuration
-- Wait 5-10 minutes and verify metrics appear in **Metrics > Explorer** by searching for `aws.drs.*`
+- Check the box to enable it and save
+- Wait 5 to 10 minutes and verify metrics appear in **Metrics > Explorer**
+  by searching for `aws.drs.*`
 - If metrics appear, no further action is needed
 - If metrics do not appear after 15 minutes, proceed with Option A or Option B
 
 **If DRS is not found:**
-- Use Option A (CloudWatch Metric Streams) or Option B (Lambda polling)
+- Use Option A or Option B
 
 ---
 
@@ -383,8 +362,8 @@ aws logs put-subscription-filter \
 
 > **Note for SCP metrics:** The `aws.organizations.scp.denied_requests` metric
 > relies on CloudTrail events from the management account. Subscribe the
-> management account CloudTrail log group to a Forwarder instance deployed in
-> the management account.
+> management account CloudTrail log group to a Forwarder instance deployed
+> in the management account.
 
 ### 2.3 Create Log-based Metrics in Datadog
 
@@ -394,7 +373,7 @@ Once logs are flowing, go to **Logs > Generate Metrics** in Datadog and select
 | Metric Name | Filter Query | Type | Recommended Tags |
 |---|---|---|---|
 | `aws.cloudtrail.unauthorized_api_calls` | `source:cloudtrail @errorCode:(UnauthorizedOperation OR AccessDenied*)` | Count | `@awsRegion`, `@errorCode`, `@userIdentity.arn` |
-| `aws.cloudtrail.root_activity` | `source:cloudtrail @userIdentity.type:Root -@userIdentity.invokedBy:* @eventType:AwsApiCall` | Count | `@awsRegion`, `@eventName` |
+| `aws.cloudtrail.root_activity` | `source:cloudtrail @userIdentity.type:Root NOT @userIdentity.invokedBy:* @eventType:AwsApiCall` | Count | `@awsRegion`, `@eventName` |
 | `aws.organizations.scp.denied_requests` | `source:cloudtrail @errorCode:AccessDenied @errorMessage:*service\ control\ policy*` | Count | `@awsRegion`, `@userIdentity.arn`, `@errorCode` |
 | `aws.ssm.session.failed` | `source:cloudtrail @eventSource:ssm.amazonaws.com @eventName:StartSession @errorCode:*` | Count | `@awsRegion`, `@userIdentity.arn`, `@errorCode` |
 
@@ -440,7 +419,7 @@ aws logs put-metric-filter \
     metricName="SCPDeniedRequests",metricNamespace="CloudTrailMetrics",metricValue=1,defaultValue=0
 ```
 
-**SSM session failed:**
+**SSM session failures:**
 
 ```bash
 aws logs put-metric-filter \
@@ -451,7 +430,7 @@ aws logs put-metric-filter \
     metricName="SSMSessionFailed",metricNamespace="CloudTrailMetrics",metricValue=1,defaultValue=0
 ```
 
-Use the **Metric Renaming** feature in the Datadog AWS integration to map the
+Use the **Metric Renaming** feature in the Datadog AWS integration to map
 CloudWatch-generated names to your target metric names.
 
 ---
@@ -459,18 +438,20 @@ CloudWatch-generated names to your target metric names.
 ## Part 3: AWS Security Hub Integration
 
 AWS Security Hub aggregates compliance findings from Config rules, Control
-Tower guardrails, and other security services into a single service. The
-Datadog AWS integration pulls these findings natively.
+Tower guardrails, and other security services. The Datadog AWS integration
+pulls these findings natively.
 
-> **Important:** The Security Hub integration provides **findings (logs)**, not metrics. To get actual timeseries metrics, you must create log-based metrics from these findings (see section 3.4) or use the Lambda approach in Part 4.
+> **Important:** Security Hub provides **findings (logs)**, not timeseries
+> metrics. This makes it well suited for compliance reporting and security
+> investigation in Datadog. For metric-based alerting and dashboards that
+> require numeric count or gauge values, use **Part 4 (Lambda)** instead,
+> which submits direct timeseries metrics.
 
-**Metrics covered:**
-- `aws.config.rule.non_compliant`
-- `aws.config.public_resource_detected`
-- `aws.controltower.guardrail.failed`
-- `aws.controltower.logging.disabled`
-
-> **Recommendation:** If you need numeric count/gauge metrics for monitoring and alerting, use the **Lambda approach in Part 4** instead. The Security Hub integration is best for security investigation and compliance reporting, not for metric-based alerting.
+**Coverage:**
+- `aws.config.rule.non_compliant` (compliance reporting path)
+- `aws.config.public_resource_detected` (compliance reporting path)
+- `aws.controltower.guardrail.failed` (compliance reporting path)
+- `aws.controltower.logging.disabled` (compliance reporting path)
 
 ### 3.1 Enable AWS Security Hub
 
@@ -504,30 +485,40 @@ aws securityhub enable-import-findings-for-product \
 3. Enable the integration and save
 
 Findings from Config rules and Control Tower guardrails will appear in Datadog
-under **Security > Findings** and in the **Logs Explorer** with `source:aws_securityhub`.
+under **Security > Findings** and in the **Logs Explorer** with
+`source:aws_securityhub`.
 
-### 3.4 Create Log-Based Metrics from Security Hub Findings
+### 3.4 Create Log-based Metrics from Security Hub Findings
 
-Since Security Hub only provides findings (logs), you must create log-based metrics to get numeric timeseries. Navigate to **Logs > Generate Metrics** in Datadog and create the following metrics:
+To produce numeric timeseries from Security Hub findings, go to
+**Logs > Generate Metrics** in Datadog and create the following metrics.
 
 | Metric Name | Filter Query | Type | Recommended Tags |
 |---|---|---|---|
-| `aws.config.rule.non_compliant` | `source:aws_securityhub @compliance.status:FAILED @product.name:AWS Config` | Count | `@aws.account.id`, `@aws.region`, `@compliance.standard`, `@compliance.rule_id` |
-| `aws.config.public_resource_detected` | `source:aws_securityhub @compliance.status:FAILED @product.name:AWS Config (@compliance.rule_id:*public* OR @compliance.rule_id:*Public*)` | Count | `@aws.account.id`, `@aws.region`, `@compliance.rule_id`, `@resource.id` |
-| `aws.controltower.guardrail.failed` | `source:aws_securityhub @compliance.status:FAILED @product.name:AWS Control Tower` | Count | `@aws.account.id`, `@aws.region`, `@compliance.rule_id` |
-| `aws.controltower.logging.disabled` | `source:aws_securityhub @compliance.status:FAILED @product.name:AWS Config (@compliance.rule_id:*cloudtrail* OR @compliance.rule_id:*log*)` | Count | `@aws.account.id`, `@aws.region`, `@compliance.rule_id` |
+| `aws.config.rule.non_compliant` | `source:aws_securityhub @compliance.status:FAILED @product.name:"AWS Config"` | Count | `@aws.account.id`, `@aws.region`, `@compliance.rule_id` |
+| `aws.config.public_resource_detected` | `source:aws_securityhub @compliance.status:FAILED @product.name:"AWS Config" (@compliance.rule_id:*public* OR @compliance.rule_id:*Public*)` | Count | `@aws.account.id`, `@aws.region`, `@compliance.rule_id`, `@resource.id` |
+| `aws.controltower.guardrail.failed` | `source:aws_securityhub @compliance.status:FAILED @product.name:"AWS Control Tower"` | Count | `@aws.account.id`, `@aws.region`, `@compliance.rule_id` |
+| `aws.controltower.logging.disabled` | `source:aws_securityhub @compliance.status:FAILED @product.name:"AWS Config" (@compliance.rule_id:*cloudtrail* OR @compliance.rule_id:*log*)` | Count | `@aws.account.id`, `@aws.region`, `@compliance.rule_id` |
 
-> **Note:** The exact field names in Security Hub findings may vary. Use the Log Explorer to inspect actual finding structure and adjust filter queries accordingly. Common fields include `@compliance.status`, `@product.name`, `@compliance.rule_id`, `@aws.account.id`, and `@aws.region`.
+> **Note:** Field names in Security Hub findings can vary. Use the Logs
+> Explorer to inspect actual finding structure and adjust queries accordingly.
+> Common fields include `@compliance.status`, `@product.name`,
+> `@compliance.rule_id`, `@aws.account.id`, and `@aws.region`.
 
-### 3.5 Alternative: EventBridge Lambda for Direct Metrics (Recommended for Alerting)
+### 3.5 Recommended Path for Metric-Based Alerting
 
-If you need reliable numeric timeseries metrics for monitoring and alerting, use the Lambda handlers in Part 4 instead. The Lambda approach:
-- Provides direct count/gauge metrics (no log-to-metric conversion needed)
-- More reliable for alerting (metrics are immediately available)
-- Lower latency (no log ingestion delay)
-- Better for dashboards requiring numeric values
+If you need low-latency numeric timeseries metrics for monitor-based alerting,
+use the Lambda handlers in Part 4 rather than the log-based metric approach
+above. The Lambda approach:
 
-The Lambda handlers for `handle_config` and `handle_control_tower` in Part 4 submit these as count metrics directly to Datadog. Enable the corresponding EventBridge rules for `aws.config` and `aws.controltower` in addition to the rules listed in Part 4.
+- Submits count metrics directly at the point of the event with no log
+  ingestion delay
+- Does not depend on Security Hub finding ingestion timing
+- Is better suited to threshold-based monitors that need immediate notification
+
+Enable the EventBridge rules for `aws.config` and `aws.controltower` from the
+rule list in Part 4 to activate these handlers alongside the rest of the Lambda
+integration.
 
 ---
 
@@ -535,8 +526,8 @@ The Lambda handlers for `handle_config` and `handle_control_tower` in Part 4 sub
 
 For services that emit events through EventBridge rather than CloudWatch, a
 Lambda function parses each event and submits a metric to Datadog via the
-metrics API. This part also contains the fallback handlers for Config and
-Control Tower if you chose not to use Security Hub in Part 3.
+metrics API. This part is also the recommended path for compliance metrics
+that require reliable numeric timeseries for alerting.
 
 ### 4.1 Lambda Function
 
@@ -553,8 +544,10 @@ from datetime import datetime, timedelta, timezone
 
 # ── Metric Submission ──────────────────────────────────────────────────────────
 
-# Cache the API key within the Lambda execution context to reduce Secrets Manager calls
+# Cache the API key within the Lambda execution context to reduce
+# Secrets Manager API calls across multiple invocations of the same instance
 _api_key_cache = None
+
 
 def get_api_key():
     global _api_key_cache
@@ -611,12 +604,10 @@ def lambda_handler(event, context):
     if source == "aws.backup":
         handle_backup(detail, base_tags)
     elif source == "aws.config":
-        # Only required if not using Security Hub in Part 3
         handle_config(detail_type, detail, base_tags)
     elif source == "aws.drs":
         handle_drs(detail, base_tags)
     elif source == "aws.controltower":
-        # Only required if not using Security Hub in Part 3
         handle_control_tower(detail_type, detail, base_tags)
     elif source == "aws.servicecatalog":
         handle_service_catalog(detail, base_tags)
@@ -642,7 +633,7 @@ def handle_backup(detail, base_tags):
         submit_metric("aws.backup.backupjobfailed", 1, tags, "count")
 
 
-# ── AWS Config (fallback if not using Security Hub) ───────────────────────────
+# ── AWS Config ─────────────────────────────────────────────────────────────────
 
 PUBLIC_RESOURCE_RULES = [
     "s3-bucket-public-read-prohibited",
@@ -701,7 +692,7 @@ def handle_drs(detail, base_tags):
     submit_metric("aws.drs.recovery_instance_ready", is_ready, tags, "gauge")
 
 
-# ── AWS Control Tower (fallback if not using Security Hub) ────────────────────
+# ── AWS Control Tower ──────────────────────────────────────────────────────────
 
 def handle_control_tower(detail_type, detail, base_tags):
     if "Drift" in detail_type:
@@ -792,8 +783,9 @@ def run_pollers():
 
 def poll_drs_cloudwatch_metrics():
     """
-    Fallback for Part 1 Option B only.
-    Remove this function if using CloudWatch Metric Streams in Part 1 Option A.
+    Used for Part 1 Option B (Lambda polling fallback) only.
+    If you are using CloudWatch Metric Streams from Part 1 Option A,
+    remove this call from run_pollers() to avoid duplicate submissions.
     """
     cw = boto3.client("cloudwatch")
     drs_client = boto3.client("drs")
@@ -873,6 +865,9 @@ def report_patch_compliance():
 def report_drs_test_failures():
     drs = boto3.client("drs")
     paginator = drs.get_paginator("describe_jobs")
+
+    # boto3 returns timezone-aware datetime objects from AWS APIs.
+    # cutoff is also timezone-aware to ensure a valid comparison.
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
     for page in paginator.paginate():
@@ -881,8 +876,12 @@ def report_drs_test_failures():
                 continue
 
             creation_time = job.get("creationDateTime")
-            if creation_time and creation_time < cutoff:
-                continue
+            # Ensure creation_time is timezone-aware before comparing
+            if creation_time:
+                if creation_time.tzinfo is None:
+                    creation_time = creation_time.replace(tzinfo=timezone.utc)
+                if creation_time < cutoff:
+                    continue
 
             status = job.get("status", "")
             if status in ("COMPLETED_WITH_ERRORS", "FAILED"):
@@ -929,7 +928,7 @@ aws lambda add-permission \
 }
 ```
 
-**AWS Config (only required if not using Security Hub):**
+**AWS Config:**
 
 ```json
 {
@@ -949,7 +948,7 @@ aws lambda add-permission \
 }
 ```
 
-**AWS Control Tower (only required if not using Security Hub):**
+**AWS Control Tower:**
 
 ```json
 {
@@ -1208,8 +1207,8 @@ provided as costs vary by account activity and data volume.
 
 ### AWS Secrets Manager
 - Each Lambda invocation calls Secrets Manager to retrieve the Datadog API key
-- At high invocation rates this adds up; consider caching the secret value
-  within the Lambda execution context to reduce API calls per invocation
+- The API key is cached within the Lambda execution context in this guide to
+  reduce Secrets Manager calls across warm invocations of the same instance
 
 ### AWS EventBridge
 - Events on the default bus from AWS services are free
