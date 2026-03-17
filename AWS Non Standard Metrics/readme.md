@@ -275,28 +275,6 @@ These permissions are already included in the IAM policy defined in Part 6.
 
 ---
 
-### Option C: Check the Datadog Services List
-
-Before implementing either option above, confirm DRS is not already available
-in the Datadog UI under a different name.
-
-1. Go to **Integrations > Amazon Web Services**
-2. Click **Edit** on the AWS account tile
-3. Open the **Metric Collection** tab
-4. Search the services list for `Disaster Recovery` or `DRS`
-
-**If DRS is found:**
-- Check the box to enable it and save
-- Wait 5 to 10 minutes and verify metrics appear in **Metrics > Explorer**
-  by searching for `aws.drs.*`
-- If metrics appear, no further action is needed
-- If metrics do not appear after 15 minutes, proceed with Option A or Option B
-
-**If DRS is not found:**
-- Use Option A or Option B
-
----
-
 ## Part 2: Datadog Forwarder and Log-based Metrics (Recommended)
 
 The Datadog Forwarder is a Datadog-maintained Lambda function that forwards
