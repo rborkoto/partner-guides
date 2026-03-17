@@ -132,6 +132,8 @@ Deploy the Forwarder from the AWS Serverless Application Repository. This
 creates a CloudFormation stack containing the Lambda function and all required
 IAM permissions.
 
+You can also find the updated CF stack here : https://docs.datadoghq.com/logs/guide/forwarder/?tab=cloudformation
+
 ```bash
 aws cloudformation create-stack \
   --stack-name datadog-forwarder \
