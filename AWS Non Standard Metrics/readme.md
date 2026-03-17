@@ -75,7 +75,6 @@ This guide covers four collection patterns to bring all metrics in the reference
 | `aws.ssm.command.failed` | SSM EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
 | `aws.ssm.automation.failed` | SSM EventBridge events | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
 | `aws.ssm.session.failed` | CloudTrail events via EventBridge | EventBridge + Lambda + Datadog API | [Method 3](#method-3-eventbridge-lambda-and-datadog-api) |
-| GPU Metrics | Windows or Linux agent | DCGM Exporter or built-in GPU monitoring | [GPU Metrics](#gpu-metrics) |
 
 ---
 
