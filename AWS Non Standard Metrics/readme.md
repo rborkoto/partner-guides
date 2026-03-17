@@ -12,7 +12,7 @@ This guide covers all configuration steps and code required to bring the
 following metrics into Datadog.
 
 > **Prerequisites:** Before following this guide, complete all steps in the
-> [Prerequisites README](./PREREQUISITES.md).
+> [Prerequisites README](https://github.com/rborkoto/partner-guides/blob/main/AWS%20Non%20Standard%20Metrics/Pre-requsities.md).
 
 ---
 
