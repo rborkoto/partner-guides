@@ -49,6 +49,7 @@ This guide covers four collection patterns to bring all metrics in the reference
 - Python 3.12 for Lambda functions in this guide.
 - AWS CLI configured with appropriate credentials.
 
+Full guide just for prerequsistes [here](https://github.com/rborkoto/partner-guides/blob/main/AWS%20Non%20Standard%20Metrics/Pre-requsities.md) 
 ---
 
 ## Quick Reference Table
