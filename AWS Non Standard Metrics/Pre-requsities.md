@@ -17,7 +17,7 @@ In your AWS account, create a new IAM role with the following trust policy.
 Replace `YOUR_DATADOG_EXTERNAL_ID` with the External ID shown in the Datadog
 AWS integration tile under **Integrations > Amazon Web Services > Add Account**.
 
-```json
+
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -35,6 +35,8 @@ AWS integration tile under **Integrations > Amazon Web Services > Add Account**.
     }
   ]
 }
+
+
 1.2 Attach the Required Policy
 Attach the AWS managed policy SecurityAudit and the following inline policy
 to allow Datadog to collect metrics and resource data.
