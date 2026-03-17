@@ -14,7 +14,7 @@ the lowest-effort option. Custom Lambda code is only introduced where no
 simpler path exists.
 
 > **Prerequisites:** Before following this guide, complete all steps in the
-> [Prerequisites README](./PREREQUISITES.md).
+> [Prerequisites Guide](https://github.com/rborkoto/partner-guides/blob/main/AWS%20Non%20Standard%20Metrics/Pre-requsities.md).
 
 ---
 
@@ -462,7 +462,7 @@ AWS Security Hub aggregates compliance findings from Config rules, Control
 Tower guardrails, and other security services into a single service. The
 Datadog AWS integration pulls these findings natively.
 
-> **⚠️ Important:** The Security Hub integration provides **findings (logs)**, not metrics. To get actual timeseries metrics, you must create log-based metrics from these findings (see section 3.4) or use the Lambda approach in Part 4.
+> **Important:** The Security Hub integration provides **findings (logs)**, not metrics. To get actual timeseries metrics, you must create log-based metrics from these findings (see section 3.4) or use the Lambda approach in Part 4.
 
 **Metrics covered:**
 - `aws.config.rule.non_compliant`
@@ -522,10 +522,10 @@ Since Security Hub only provides findings (logs), you must create log-based metr
 ### 3.5 Alternative: EventBridge Lambda for Direct Metrics (Recommended for Alerting)
 
 If you need reliable numeric timeseries metrics for monitoring and alerting, use the Lambda handlers in Part 4 instead. The Lambda approach:
-- ✅ Provides direct count/gauge metrics (no log-to-metric conversion needed)
-- ✅ More reliable for alerting (metrics are immediately available)
-- ✅ Lower latency (no log ingestion delay)
-- ✅ Better for dashboards requiring numeric values
+- Provides direct count/gauge metrics (no log-to-metric conversion needed)
+- More reliable for alerting (metrics are immediately available)
+- Lower latency (no log ingestion delay)
+- Better for dashboards requiring numeric values
 
 The Lambda handlers for `handle_config` and `handle_control_tower` in Part 4 submit these as count metrics directly to Datadog. Enable the corresponding EventBridge rules for `aws.config` and `aws.controltower` in addition to the rules listed in Part 4.
 
