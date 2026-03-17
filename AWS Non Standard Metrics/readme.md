@@ -290,6 +290,8 @@ metric filter configuration or custom namespace setup required.
 - `aws.organizations.scp.denied_requests`
 - `aws.ssm.session.failed`
 
+Latest Datadog Forwarder Documentation : https://docs.datadoghq.com/logs/guide/forwarder/?tab=cloudformation#overview
+
 ### 2.1 Deploy the Datadog Forwarder
 
 ```bash
