@@ -3,6 +3,7 @@
 This document covers everything that must be in place before following the metrics import guide. Work through each section in order before proceeding with any configuration steps.
 
 ---
+Note : You can also use the CF template directly from Datadog UI instead of doing this via CLI
 
 ## 1. Datadog AWS Integration with IAM Cross-Account Role
 
