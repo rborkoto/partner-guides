@@ -761,15 +761,18 @@ Adjust the pattern to match whatever consistently marks the start of a record in
 
 ### Logs appear in Datadog with NUL bytes between every character
 
-If you open a log in the Log Explorer and see `NUL` characters between every letter, or the raw message looks like garbled double-spaced text, the log file is encoded in **UTF-16 or UTF-16LE** but the Agent is reading it as UTF-8.
-
-This is a common issue with MFT tools running on Windows, which sometimes default to UTF-16 when writing log files. The NUL bytes are the second byte of each UTF-16 character pair being misinterpreted as null characters.
+If you open a log in the Log Explorer and see `NUL` characters between every letter, or the Grok parser fails to match records that look structurally correct, the log file likely contains **null bytes** (`\x00`). This is common with Windows MFT tools that write logs in UTF-16 — each character is two bytes, and when the Agent reads the file as UTF-8 the second byte of each pair appears as a null character. The result is a message like `;` `\x00` `7` `\x00` `2` `\x00` `2` `\x00` `;` which no Grok rule will match.
 
 **Symptoms:**
-- Some log records parse correctly (those written in UTF-8) while others show NUL characters (those written in UTF-16)
-- The Grok parser fails to match UTF-16 records even though the rule is correct
+- Some log records parse correctly while others show NUL characters
+- The Grok parser fails to extract any fields even though the rule is correct
+- The raw message in Log Explorer looks like double-spaced or garbled text
 
-**Fix:** Set the `encoding` parameter in your `conf.yaml` to match the actual file encoding:
+**Fix — strip null bytes at the Agent using `mask_sequences`:**
+
+Datadog recommends cleaning invalid characters at the Agent level before logs reach the parsing pipeline. The `mask_sequences` processing rule replaces any regex match with a placeholder string — set the placeholder to `""` to delete the matched characters entirely. Agent-side processing rules use Go regexp syntax.
+
+Add the following to your `conf.yaml`:
 
 ```yaml
 logs:
@@ -777,12 +780,36 @@ logs:
     path: C:\MFT\logs\transfer.log
     service: mft
     source: mft
-    encoding: utf-16-le
+    log_processing_rules:
+      - type: mask_sequences
+        name: strip_null_bytes
+        pattern: \x00+
+        replace_placeholder: ""
 ```
 
-If you are unsure of the encoding, open the log file in a text editor such as Notepad++ and check the encoding displayed in the status bar. Common values are `UTF-16 LE` (little-endian) and `UTF-16 BE` (big-endian). Use `utf-16-le` or `utf-16-be` accordingly in the Agent config.
+This converts `;` `\x00` `7` `\x00` `2` `\x00` `2` `\x00` `;` into `;722;` before the log reaches your Grok parser.
 
-> **Preferred fix:** If you have control over the MFT tool's log output settings, configure it to write logs in **UTF-8**. This avoids encoding mismatches entirely and is compatible with the Agent's default behaviour without any additional configuration.
+**If collecting from Docker or Kubernetes**, the same rule goes into the container label or pod annotation:
+
+```json
+# Docker label
+com.datadoghq.ad.logs: '[{"type":"file","path":"/path/to/transfer.log","service":"mft","source":"mft","log_processing_rules":[{"type":"mask_sequences","name":"strip_null_bytes","pattern":"\\x00+","replace_placeholder":""}]}]'
+```
+
+```yaml
+# Kubernetes pod annotation
+ad.datadoghq.com/<container>.logs: |
+  [{"type":"file","path":"/path/to/transfer.log","service":"mft","source":"mft",
+  "log_processing_rules":[{"type":"mask_sequences","name":"strip_null_bytes","pattern":"\\\\x00+","replace_placeholder":""}]}]
+```
+
+Note that backslashes must be escaped in labels and annotations — `\x00` becomes `\\x00` in JSON labels and `\\\\x00` in YAML annotations.
+
+**If using Observability Pipelines**, use a Custom Processor transform to rewrite the field before forwarding logs onward. This is appropriate for more advanced transformations, but for raw invalid characters in log messages, Agent-side cleanup via `mask_sequences` is the simpler and recommended first step.
+
+> **Preferred long-term fix:** If you have control over the MFT tool's log output settings, configure it to write logs in **UTF-8**. This eliminates the problem at source without requiring any Agent-side workaround.
+
+**Reference:** [Advanced Log Collection — Scrub sensitive data](https://docs.datadoghq.com/agent/logs/advanced_log_collection/#scrub-sensitive-data-from-your-logs)
 
 ---
 
