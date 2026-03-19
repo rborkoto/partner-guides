@@ -1,4 +1,4 @@
-# Datadog Monitoring for MFT File Transfers on Windows Servers (v0.8)
+# Datadog Monitoring for MFT File Transfers on Windows Servers (v0.9)
 
 ## Overview
 
@@ -734,6 +734,55 @@ Confirm that the filter in your metric definition uses the correct syntax. For p
 ### Timestamps showing ingestion time instead of transfer time
 
 The Date Remapper is either missing or pointing at the wrong attribute name. Double-check that the attribute name in the Date Remapper matches exactly what the Grok parser is outputting, including case sensitivity. Verify in the Log Explorer by expanding a parsed log and confirming the `transfer_timestamp` attribute is present.
+
+### Grok rule matches some log samples but not others (multi-line records)
+
+If certain log samples show **NO MATCH** in the Grok parser debugger while structurally similar ones match fine, the failing sample likely contains a **newline character mid-record**. This happens when an MFT tool wraps long lines (for example, a long Windows UNC path) across two physical lines in the log file. The Grok parser processes one line at a time by default, so a record split across lines will never match.
+
+**Fix:** Configure the Datadog Agent to merge continuation lines into a single record before forwarding. In your `conf.yaml`, add a `multi_line` processing rule that identifies where a new record begins:
+
+```yaml
+logs:
+  - type: file
+    path: C:\MFT\logs\transfer.log
+    service: mft
+    source: mft
+    log_processing_rules:
+      - type: multi_line
+        name: mft_record_start
+        pattern: ^;\s*\d+
+```
+
+This pattern (`^;\s*\d+`) matches lines that start with `; <number>` — the beginning of a new MFT transfer record. Lines that do not match (such as a wrapped path continuation) are appended to the previous record, so the Grok parser receives the full record as a single string.
+
+Adjust the pattern to match whatever consistently marks the start of a record in your specific log format.
+
+**Reference:** [Multi-line log aggregation](https://docs.datadoghq.com/agent/logs/advanced_log_collection/#multi-line-aggregation)
+
+### Logs appear in Datadog with NUL bytes between every character
+
+If you open a log in the Log Explorer and see `NUL` characters between every letter, or the raw message looks like garbled double-spaced text, the log file is encoded in **UTF-16 or UTF-16LE** but the Agent is reading it as UTF-8.
+
+This is a common issue with MFT tools running on Windows, which sometimes default to UTF-16 when writing log files. The NUL bytes are the second byte of each UTF-16 character pair being misinterpreted as null characters.
+
+**Symptoms:**
+- Some log records parse correctly (those written in UTF-8) while others show NUL characters (those written in UTF-16)
+- The Grok parser fails to match UTF-16 records even though the rule is correct
+
+**Fix:** Set the `encoding` parameter in your `conf.yaml` to match the actual file encoding:
+
+```yaml
+logs:
+  - type: file
+    path: C:\MFT\logs\transfer.log
+    service: mft
+    source: mft
+    encoding: utf-16-le
+```
+
+If you are unsure of the encoding, open the log file in a text editor such as Notepad++ and check the encoding displayed in the status bar. Common values are `UTF-16 LE` (little-endian) and `UTF-16 BE` (big-endian). Use `utf-16-le` or `utf-16-be` accordingly in the Agent config.
+
+> **Preferred fix:** If you have control over the MFT tool's log output settings, configure it to write logs in **UTF-8**. This avoids encoding mismatches entirely and is compatible with the Agent's default behaviour without any additional configuration.
 
 ---
 
